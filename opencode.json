@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "go-backend",
+  "share": "disabled",
+  "agent": {
+    "go-backend": {
+      "mode": "primary",
+      "description": "Primary Go + Gin backend orchestrator"
+    }
+  }
+}
