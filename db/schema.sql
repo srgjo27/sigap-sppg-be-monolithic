@@ -350,3 +350,20 @@ CREATE INDEX idx_aduan_sppg_status ON pengaduan (sppg_id, status);
 CREATE INDEX idx_trx_siklus_kat ON transaksi_dana (siklus_id, kategori);
 CREATE INDEX idx_notif_user_unread ON notifikasi (user_id) WHERE dibaca_at IS NULL;
 CREATE INDEX idx_audit_ref ON audit_log (tabel, record_id);
+
+-- ===== Additional schemes =====
+CREATE TABLE refresh_token (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash CHAR(64) NOT NULL UNIQUE,   -- SHA-256, token asli tidak disimpan
+  user_agent TEXT,
+  ip_address INET,
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_refresh_user ON refresh_token (user_id) WHERE revoked_at IS NULL;
+
+ALTER TABLE users ADD COLUMN gagal_login SMALLINT NOT NULL DEFAULT 0,
+                  ADD COLUMN terkunci_sampai TIMESTAMPTZ,
+                  ADD COLUMN wajib_ganti_password BOOLEAN NOT NULL DEFAULT true;
