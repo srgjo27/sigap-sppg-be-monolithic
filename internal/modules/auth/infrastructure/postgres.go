@@ -272,16 +272,22 @@ func (p *Postgres) Append(ctx context.Context, e *domain.AuditEntry) error {
 // List returns paginated audit entries with optional SPPG scoping.
 func (p *Postgres) List(ctx context.Context, filter domain.AuditFilter, scopeSPPGID *int64) ([]domain.AuditEntry, int, error) {
 	filter.Normalize()
-	where := `WHERE ($5::bigint IS NULL OR u.sppg_id=$5) AND ($1::text IS NULL OR a.aksi=$1) AND ($2::text IS NULL OR a.tabel=$2) AND ($3::bigint IS NULL OR a.user_id=$3)`
+	where := `WHERE ($5::bigint IS NULL OR u.sppg_id=$5) AND ($1::text IS NULL OR a.aksi=$1) AND ($2::text IS NULL OR a.tabel=$2) AND ($3::bigint IS NULL OR a.user_id=$3)` +
+		` AND ($8::bigint IS NULL OR a.record_id=$8) AND ($9::timestamptz IS NULL OR a.created_at>=$9) AND ($10::timestamptz IS NULL OR a.created_at<=$10)`
 	countQ := `SELECT COUNT(*) FROM audit_log a LEFT JOIN users u ON u.id=a.user_id ` + where
 	var total int
-	if err := p.Pool.QueryRow(ctx, countQ, nullableStr(filter.Aksi), nullableStr(filter.Tabel), nullableInt(filter.UserID), nil, nullableInt(scopeSPPGID)).Scan(&total); err != nil {
+	if err := p.Pool.QueryRow(ctx, countQ,
+		nullableStr(filter.Aksi), nullableStr(filter.Tabel), nullableInt(filter.UserID), nil, nullableInt(scopeSPPGID),
+		nil, nil, nullableInt(filter.RecordID), nullableTime(filter.Dari), nullableTime(filter.Sampai),
+	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count audit: %w", err)
 	}
 	var listQ = `SELECT a.id, a.user_id, a.aksi, a.tabel, a.record_id, a.data_lama::text, a.data_baru::text, a.ip_address::text, a.created_at
-		FROM audit_log a LEFT JOIN users u ON u.id=a.user_id ` + where + ` ORDER BY a.id DESC LIMIT $6 OFFSET $7`
+		FROM audit_log a LEFT JOIN users u ON u.id=a.user_id ` + where + ` ORDER BY a.id DESC LIMIT $11 OFFSET $12`
 	rows, err := p.Pool.Query(ctx, listQ,
-		nullableStr(filter.Aksi), nullableStr(filter.Tabel), nullableInt(filter.UserID), nil, nullableInt(scopeSPPGID), filter.Limit, filter.Offset(),
+		nullableStr(filter.Aksi), nullableStr(filter.Tabel), nullableInt(filter.UserID), nil, nullableInt(scopeSPPGID),
+		nil, nil, nullableInt(filter.RecordID), nullableTime(filter.Dari), nullableTime(filter.Sampai),
+		filter.Limit, filter.Offset(),
 	)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list audit: %w", err)

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/application"
@@ -121,15 +122,24 @@ type ChangePasswordRequest struct {
 	PasswordBaru string `json:"password_baru" binding:"required"`
 }
 
-// AuditLogItem is one audit row.
+// AuditUserRef is the nested actor in audit responses (MVP-001.7).
+type AuditUserRef struct {
+	ID    int64  `json:"id"`
+	Nama  string `json:"nama"`
+	Peran string `json:"peran"`
+}
+
+// AuditLogItem is one audit row (MVP-001.7).
 type AuditLogItem struct {
-	ID        int64     `json:"id"`
-	UserID    *int64    `json:"user_id,omitempty"`
-	Aksi      string    `json:"aksi"`
-	Tabel     string    `json:"tabel"`
-	RecordID  *int64    `json:"record_id,omitempty"`
-	IPAddress *string   `json:"ip_address,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        int64           `json:"id"`
+	User      *AuditUserRef   `json:"user,omitempty"`
+	Aksi      string          `json:"aksi"`
+	Tabel     string          `json:"tabel"`
+	RecordID  *int64          `json:"record_id,omitempty"`
+	DataLama  json.RawMessage `json:"data_lama,omitempty"`
+	DataBaru  json.RawMessage `json:"data_baru,omitempty"`
+	IPAddress *string         `json:"ip_address,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 // AuditLogListResponse wraps paginated audit rows.
@@ -189,14 +199,24 @@ func toMeResponse(p *application.Profile) MeResponse {
 	return res
 }
 
-func toAuditItem(e domain.AuditEntry) AuditLogItem {
-	return AuditLogItem{
+func toAuditItem(v application.AuditLogView) AuditLogItem {
+	e := v.Entry
+	item := AuditLogItem{
 		ID:        e.ID,
-		UserID:    e.UserID,
 		Aksi:      e.Aksi,
 		Tabel:     e.Tabel,
 		RecordID:  e.RecordID,
 		IPAddress: e.IPAddress,
 		CreatedAt: e.CreatedAt,
 	}
+	if v.Actor != nil {
+		item.User = &AuditUserRef{ID: v.Actor.ID, Nama: v.Actor.Nama, Peran: v.Actor.Peran}
+	}
+	if e.DataLama != nil {
+		item.DataLama = json.RawMessage(*e.DataLama)
+	}
+	if e.DataBaru != nil {
+		item.DataBaru = json.RawMessage(*e.DataBaru)
+	}
+	return item
 }

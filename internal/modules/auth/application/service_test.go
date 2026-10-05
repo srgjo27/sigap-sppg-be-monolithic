@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -508,5 +509,145 @@ func TestAuditRBAC(t *testing.T) {
 	headless := &domain.Claims{UserID: 6, Role: domain.RoleKepalaSPPG}
 	if _, _, err := f.svc.ListAuditLogs(ctx, headless, domain.AuditFilter{}); err != domain.ErrForbidden {
 		t.Fatalf("expected forbidden for headless kepala, got %v", err)
+	}
+}
+
+func TestAuditFiltersRecordAndDateRange(t *testing.T) {
+	f := newTestFixture()
+	ctx := context.Background()
+	sppg := int64(1)
+	target, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+		Nama: "Audit Target", Email: "auditt@x.com", Peran: domain.RoleAkuntan, SPPGID: &sppg, PasswordAwal: ptr("audit123"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deact := false
+	if _, err := f.svc.UpdateUser(ctx, adminClaims(nil), target.User.ID, domain.UpdateUserInput{Aktif: &deact}, nil); err != nil {
+		t.Fatal(err)
+	}
+	admin := adminClaims(nil)
+	byRecord, _, err := f.svc.ListAuditLogs(ctx, admin, domain.AuditFilter{RecordID: &target.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byRecord) == 0 {
+		t.Fatal("expected entries for record_id")
+	}
+	for _, v := range byRecord {
+		if v.Entry.RecordID == nil || *v.Entry.RecordID != target.User.ID {
+			t.Fatalf("record mismatch: %+v", v.Entry.RecordID)
+		}
+	}
+	// Login entries carry their actor enriched (id, nama, peran).
+	second, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+		Nama: "Audit Login", Email: "auditl@x.com", Peran: domain.RoleAkuntan, SPPGID: &sppg, PasswordAwal: ptr("audit123"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Login(ctx, "auditl@x.com", "audit123", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	logins, _, err := f.svc.ListAuditLogs(ctx, admin, domain.AuditFilter{Aksi: ptr("login"), UserID: &second.User.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logins) == 0 {
+		t.Fatal("expected login entries")
+	}
+	for _, v := range logins {
+		if v.Actor == nil || v.Actor.ID != second.User.ID || v.Actor.Nama != "Audit Login" || v.Actor.Peran != string(domain.RoleAkuntan) {
+			t.Fatalf("expected enriched actor, got %+v", v.Actor)
+		}
+	}
+	future := f.now.Add(time.Hour)
+	empty, _, err := f.svc.ListAuditLogs(ctx, admin, domain.AuditFilter{Dari: &future})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("expected no entries after future dari, got %d", len(empty))
+	}
+	past := f.now.Add(-time.Hour)
+	all, _, err := f.svc.ListAuditLogs(ctx, admin, domain.AuditFilter{Dari: &past, Sampai: &future})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) == 0 {
+		t.Fatal("expected entries in wide range")
+	}
+	// Reversed range is a 400.
+	if _, _, err := f.svc.ListAuditLogs(ctx, admin, domain.AuditFilter{Dari: &future, Sampai: &past}); err == nil {
+		t.Fatal("expected reversed-range rejection")
+	} else if ve, ok := err.(*domain.ValidationError); !ok || ve.Fields["sampai"] == "" {
+		t.Fatalf("expected sampai validation error, got %v", err)
+	}
+}
+
+func TestAuditNeverContainsSecrets(t *testing.T) {
+	f := newTestFixture()
+	ctx := context.Background()
+	sppg := int64(1)
+	created, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+		Nama: "Secret User", Email: "secret@x.com", Peran: domain.RoleAkuntan, SPPGID: &sppg,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Login(ctx, "secret@x.com", "salah123", nil, nil); err == nil {
+		t.Fatal("expected failed login")
+	}
+	if _, err := f.svc.UpdateUser(ctx, adminClaims(nil), created.User.ID, domain.UpdateUserInput{Nama: ptr("Secret Renamed"), ResetPassword: ptr(true)}, nil); err != nil {
+		t.Fatal(err)
+	}
+	views, _, err := f.svc.ListAuditLogs(ctx, adminClaims(nil), domain.AuditFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) == 0 {
+		t.Fatal("expected audit entries")
+	}
+	for _, v := range views {
+		for _, payload := range []*string{v.Entry.DataLama, v.Entry.DataBaru} {
+			if payload == nil {
+				continue
+			}
+			lowered := strings.ToLower(*payload)
+			for _, secret := range []string{"password_hash", "password_awal", "password_sementara", "password_lama", "password_baru", "refresh_token", "token_hash"} {
+				if strings.Contains(lowered, secret) {
+					t.Fatalf("audit leaks %q: %s", secret, *payload)
+				}
+			}
+		}
+	}
+}
+
+func TestDenialsAreLogged(t *testing.T) {
+	f := newTestFixture()
+	ctx := context.Background()
+	sppg := int64(1)
+	peon := &domain.Claims{UserID: 42, Role: domain.RoleAkuntan, SPPGID: &sppg}
+	_, err := f.svc.CreateUser(ctx, peon, domain.CreateUserInput{
+		Nama: "Nope", Email: "nope@x.com", Peran: domain.RoleAkuntan, SPPGID: &sppg, PasswordAwal: ptr("nope1234"),
+	}, nil)
+	if err != domain.ErrForbidden {
+		t.Fatalf("expected forbidden, got %v", err)
+	}
+	denials, _, err := f.svc.ListAuditLogs(ctx, adminClaims(nil), domain.AuditFilter{Aksi: ptr("DENY")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(denials) == 0 {
+		t.Fatal("expected DENY entries")
+	}
+	found := false
+	for _, v := range denials {
+		if v.Entry.UserID != nil && *v.Entry.UserID == 42 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected DENY entry for user 42")
 	}
 }

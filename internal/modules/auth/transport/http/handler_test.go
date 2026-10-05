@@ -400,7 +400,193 @@ func TestUpdateUserResetSelfAndLastKepala(t *testing.T) {
 	}
 }
 
+func TestRoleMatrixTable(t *testing.T) {
+	tests := []struct {
+		name       string
+		role       domain.Role
+		sppg       *int64
+		method     string
+		path       string
+		withBody   bool
+		wantStatus int
+	}{
+		{"admin creates user", domain.RoleAdmin, nil, "POST", "/api/v1/users", true, http.StatusCreated},
+		{"kepala creates own-sppg user", domain.RoleKepalaSPPG, ptrInt(1), "POST", "/api/v1/users", true, http.StatusCreated},
+		{"kepala cannot create other-sppg user", domain.RoleKepalaSPPG, ptrInt(1), "POST", "/api/v1/users-other", true, http.StatusForbidden},
+		{"akuntan cannot manage users", domain.RoleAkuntan, ptrInt(1), "POST", "/api/v1/users", true, http.StatusForbidden},
+		{"pengawas cannot manage users", domain.RolePengawas, ptrInt(1), "POST", "/api/v1/users", true, http.StatusForbidden},
+		{"admin reads audit", domain.RoleAdmin, nil, "GET", "/api/v1/audit-logs", false, http.StatusOK},
+		{"kepala reads audit", domain.RoleKepalaSPPG, ptrInt(1), "GET", "/api/v1/audit-logs", false, http.StatusOK},
+		{"pengawas reads audit", domain.RolePengawas, ptrInt(1), "GET", "/api/v1/audit-logs", false, http.StatusOK},
+		{"akuntan cannot read audit", domain.RoleAkuntan, ptrInt(1), "GET", "/api/v1/audit-logs", false, http.StatusForbidden},
+		{"petugas_dapur cannot read audit", domain.RolePetugasDapur, ptrInt(1), "GET", "/api/v1/audit-logs", false, http.StatusForbidden},
+		{"pengawas cannot PATCH users", domain.RolePengawas, ptrInt(1), "PATCH", "/api/v1/users/1", true, http.StatusForbidden},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newHTTPFixture()
+			email := "matrix-tok@example.com"
+			pw := "matrix12"
+			ctx := context.Background()
+			created, err := f.svc.CreateUser(ctx, &domain.Claims{UserID: 999, Role: domain.RoleAdmin}, domain.CreateUserInput{
+				Nama: "Matrix T", Email: email, Peran: tc.role, SPPGID: tc.sppg, PasswordAwal: &pw,
+			}, nil)
+			if err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			clearWajib(t, f, created.User.ID)
+			login, err := f.svc.Login(ctx, email, pw, nil, nil)
+			if err != nil {
+				t.Fatalf("login: %v", err)
+			}
+			path := tc.path
+			var body any
+			if tc.withBody {
+				body = map[string]any{
+					"nama": "Matrix User", "email": "matrix-new@x.com", "peran": "akuntan",
+					"sppg_id": 1, "password_awal": "matrix12",
+				}
+				if path == "/api/v1/users-other" {
+					path = "/api/v1/users"
+					body = map[string]any{
+						"nama": "Matrix User", "email": "matrix-new@x.com", "peran": "akuntan",
+						"sppg_id": 2, "password_awal": "matrix12",
+					}
+				}
+			}
+			w := doRequest(t, f.router, tc.method, path, login.AccessToken, body)
+			if w.Code != tc.wantStatus {
+				t.Fatalf("got %d want %d: %s", w.Code, tc.wantStatus, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestAuditLogEnrichedShapeAndFilters(t *testing.T) {
+	f := newHTTPFixture()
+	adminToken := seedAdminAndLogin(t, f, ptrInt(1), "admin5@x.com", "admin1234", domain.RoleAdmin)
+
+	created := doRequest(t, f.router, "POST", "/api/v1/users", adminToken, map[string]any{
+		"nama": "Audit Me", "email": "auditme@x.com", "peran": "akuntan", "sppg_id": 1, "password_awal": "audit123",
+	})
+	var cu CreateUserResponse
+	_ = json.Unmarshal(created.Body.Bytes(), &cu)
+
+	// Enriched shape: nested user + data fields.
+	list := doRequest(t, f.router, "GET", "/api/v1/audit-logs", adminToken, nil)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list: %d %s", list.Code, list.Body.String())
+	}
+	var res AuditLogListResponse
+	if err := json.Unmarshal(list.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Data) == 0 {
+		t.Fatal("expected audit rows")
+	}
+	// Entries attributed to deleted/unknown users may lack a nested user,
+	// but present ones must be complete.
+	seenUser := false
+	for _, item := range res.Data {
+		if item.User == nil {
+			continue
+		}
+		seenUser = true
+		if item.User.Nama == "" || item.User.Peran == "" {
+			t.Fatalf("incomplete nested user: %+v", item)
+		}
+	}
+	// A real login produces an entry with its actor enriched.
+	_ = doRequest(t, f.router, "POST", "/api/v1/auth/login", "", map[string]any{"email": "auditme@x.com", "password": "audit123"})
+	logins := doRequest(t, f.router, "GET", "/api/v1/audit-logs?aksi=login", adminToken, nil)
+	var loginRes AuditLogListResponse
+	_ = json.Unmarshal(logins.Body.Bytes(), &loginRes)
+	if len(loginRes.Data) == 0 {
+		t.Fatal("expected login entries")
+	}
+	for _, item := range loginRes.Data {
+		if item.User == nil || item.User.Nama == "" {
+			t.Fatalf("login entry missing actor: %+v", item)
+		}
+	}
+	if !seenUser {
+		t.Fatal("expected at least one entry with nested user")
+	}
+	// record_id filter.
+	byRecord := doRequest(t, f.router, "GET", "/api/v1/audit-logs?record_id="+itoa(cu.User.ID), adminToken, nil)
+	var byRecRes AuditLogListResponse
+	_ = json.Unmarshal(byRecord.Body.Bytes(), &byRecRes)
+	if byRecord.Code != http.StatusOK || len(byRecRes.Data) == 0 {
+		t.Fatalf("record filter: %d %s", byRecord.Code, byRecord.Body.String())
+	}
+	// Date range filter (wide) + reversed range 400 + invalid 400.
+	wide := doRequest(t, f.router, "GET", "/api/v1/audit-logs?dari=2000-01-01&sampai=2100-01-01", adminToken, nil)
+	if wide.Code != http.StatusOK {
+		t.Fatalf("wide range: %d", wide.Code)
+	}
+	reversed := doRequest(t, f.router, "GET", "/api/v1/audit-logs?dari=2100-01-01&sampai=2000-01-01", adminToken, nil)
+	if reversed.Code != http.StatusBadRequest {
+		t.Fatalf("reversed range: got %d", reversed.Code)
+	}
+	bad := doRequest(t, f.router, "GET", "/api/v1/audit-logs?dari=not-a-date", adminToken, nil)
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("bad date: got %d", bad.Code)
+	}
+	badID := doRequest(t, f.router, "GET", "/api/v1/audit-logs?user_id=abc", adminToken, nil)
+	if badID.Code != http.StatusBadRequest {
+		t.Fatalf("bad user_id: got %d", badID.Code)
+	}
+}
+
+func TestUnauthenticatedAndDenyAudit(t *testing.T) {
+	f := newHTTPFixture()
+	_ = seedAdminAndLogin(t, f, ptrInt(1), "admin6@x.com", "admin1234", domain.RoleAdmin)
+	protected := []struct {
+		method, path string
+		body         any
+	}{
+		{"POST", "/api/v1/users", map[string]any{}},
+		{"PATCH", "/api/v1/users/1", map[string]any{}},
+		{"POST", "/api/v1/auth/logout", map[string]any{}},
+		{"GET", "/api/v1/auth/me", nil},
+		{"PUT", "/api/v1/auth/password", map[string]any{}},
+		{"GET", "/api/v1/audit-logs", nil},
+	}
+	for _, p := range protected {
+		w := doRequest(t, f.router, p.method, p.path, "", p.body)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s: got %d want 401", p.method, p.path, w.Code)
+		}
+	}
+	// A forbidden role action leaves a DENY entry readable via aksi=deny.
+	ctx := context.Background()
+	created, err := f.svc.CreateUser(ctx, &domain.Claims{UserID: 999, Role: domain.RoleAdmin}, domain.CreateUserInput{
+		Nama: "Peon", Email: "peon@x.com", Peran: domain.RoleAkuntan, SPPGID: ptrInt(1), PasswordAwal: ptrStr("peon1234"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clearWajib(t, f, created.User.ID)
+	login, err := f.svc.Login(ctx, "peon@x.com", "peon1234", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forbidden := doRequest(t, f.router, "GET", "/api/v1/audit-logs", login.AccessToken, nil)
+	if forbidden.Code != http.StatusForbidden {
+		t.Fatalf("forbidden: got %d", forbidden.Code)
+	}
+	adminToken := seedAdminAndLogin(t, f, nil, "admin7@x.com", "admin1234", domain.RoleAdmin)
+	deny := doRequest(t, f.router, "GET", "/api/v1/audit-logs?aksi=DENY", adminToken, nil)
+	var denyRes AuditLogListResponse
+	_ = json.Unmarshal(deny.Body.Bytes(), &denyRes)
+	if deny.Code != http.StatusOK || len(denyRes.Data) == 0 {
+		t.Fatalf("deny audit: %d %s", deny.Code, deny.Body.String())
+	}
+}
+
 func ptrInt(v int64) *int64 { return &v }
+
+func ptrStr(v string) *string { return &v }
 
 func itoa(v int64) string {
 	return json.Number(itoaStr(v)).String()

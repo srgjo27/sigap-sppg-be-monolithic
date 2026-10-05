@@ -59,6 +59,7 @@ func (m *Middleware) Authenticate() gin.HandlerFunc {
 }
 
 // RequireRoles denies roles outside the allowlist (MVP-001.8).
+// Denials are written to audit_log with aksi DENY.
 func (m *Middleware) RequireRoles(allowed ...domain.Role) gin.HandlerFunc {
 	set := map[domain.Role]bool{}
 	for _, r := range allowed {
@@ -71,7 +72,26 @@ func (m *Middleware) RequireRoles(allowed ...domain.Role) gin.HandlerFunc {
 			return
 		}
 		if !set[claims.Role] {
+			m.logDeny(c, claims, "role not allowed")
 			c.AbortWithStatusJSON(http.StatusForbidden, ErrorEnvelope{Error: ErrorBody{Code: "FORBIDDEN", Message: "peran tidak berhak"}})
+			return
+		}
+		c.Next()
+	}
+}
+
+// PengawasReadOnly enforces read-only access for pengawas (MVP-001.8):
+// any non-GET request by pengawas is denied and logged.
+func (m *Middleware) PengawasReadOnly() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		claims, ok := CurrentUser(c)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorEnvelope{Error: ErrorBody{Code: "UNAUTHENTICATED", Message: "tidak login atau token kedaluwarsa"}})
+			return
+		}
+		if claims.Role == domain.RolePengawas && c.Request.Method != http.MethodGet {
+			m.logDeny(c, claims, "pengawas read-only")
+			c.AbortWithStatusJSON(http.StatusForbidden, ErrorEnvelope{Error: ErrorBody{Code: "FORBIDDEN", Message: "pengawas hanya boleh membaca data"}})
 			return
 		}
 		c.Next()
@@ -98,11 +118,21 @@ func (m *Middleware) RequirePasswordChanged() gin.HandlerFunc {
 			return
 		}
 		if profile.User.WajibGantiPassword {
+			m.logDeny(c, claims, "password change required")
 			c.AbortWithStatusJSON(http.StatusForbidden, ErrorEnvelope{Error: ErrorBody{Code: "MUST_CHANGE_PASSWORD", Message: "wajib ganti password terlebih dahulu"}})
 			return
 		}
 		c.Next()
 	}
+}
+
+// logDeny records a 403 denial (MVP-001.8, aksi DENY). Best-effort.
+func (m *Middleware) logDeny(c *gin.Context, claims *domain.Claims, reason string) {
+	if m.svc == nil || claims == nil {
+		return
+	}
+	ip := clientIP(c)
+	m.svc.LogDenial(c.Request.Context(), &claims.UserID, reason+" "+c.Request.Method+" "+c.FullPath(), ip)
 }
 
 // RateLimitLogin enforces 10 attempts/minute/IP on login (MVP-001.2).

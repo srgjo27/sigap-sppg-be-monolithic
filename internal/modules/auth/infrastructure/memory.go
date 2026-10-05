@@ -279,6 +279,15 @@ func (m *MemoryStores) List(ctx context.Context, filter domain.AuditFilter, scop
 		if filter.UserID != nil && (e.UserID == nil || *e.UserID != *filter.UserID) {
 			continue
 		}
+		if filter.RecordID != nil && (e.RecordID == nil || *e.RecordID != *filter.RecordID) {
+			continue
+		}
+		if filter.Dari != nil && e.CreatedAt.Before(*filter.Dari) {
+			continue
+		}
+		if filter.Sampai != nil && e.CreatedAt.After(*filter.Sampai) {
+			continue
+		}
 		if scopeSPPGID != nil {
 			if e.UserID == nil {
 				continue

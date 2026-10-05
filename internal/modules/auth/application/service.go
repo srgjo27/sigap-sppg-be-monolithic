@@ -88,13 +88,16 @@ func (s *Service) CreateUser(ctx context.Context, actor *domain.Claims, in domai
 	}
 	actorRole := actor.Role
 	if !actorRole.CanManageUsers() {
+		s.deny(ctx, &actor.UserID, "users: role not allowed", ip)
 		return nil, domain.ErrForbidden
 	}
 	if actorRole == domain.RoleKepalaSPPG {
 		if domain.KepalaManagedForbidden(in.Peran) {
+			s.deny(ctx, &actor.UserID, "users: kepala cannot manage role", ip)
 			return nil, domain.ErrForbidden
 		}
 		if actor.SPPGID == nil || in.SPPGID == nil || *in.SPPGID != *actor.SPPGID {
+			s.deny(ctx, &actor.UserID, "users: cross-sppg forbidden", ip)
 			return nil, domain.ErrForbidden
 		}
 	}
@@ -311,6 +314,7 @@ func (s *Service) Refresh(ctx context.Context, plainRefresh string, ip *string, 
 		return nil, domain.ErrAccountInactive
 	}
 	if u.WajibGantiPassword {
+		s.deny(ctx, &u.ID, "refresh: password change required", ip)
 		return nil, domain.ErrMustChangePassword
 	}
 	if u.IsLocked(now) {
@@ -449,6 +453,7 @@ func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID
 		return nil, domain.ErrUnauthorized
 	}
 	if !actor.Role.CanManageUsers() {
+		s.deny(ctx, &actor.UserID, "users: role not allowed", ip)
 		return nil, domain.ErrForbidden
 	}
 	if err := domain.ValidateUpdate(in); err != nil {
@@ -463,16 +468,20 @@ func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID
 	}
 	if actor.Role == domain.RoleKepalaSPPG {
 		if domain.KepalaManagedForbidden(target.Peran) {
+			s.deny(ctx, &actor.UserID, "users: kepala cannot manage role", ip)
 			return nil, domain.ErrForbidden
 		}
 		if in.Peran != nil && domain.KepalaManagedForbidden(*in.Peran) {
+			s.deny(ctx, &actor.UserID, "users: kepala cannot assign role", ip)
 			return nil, domain.ErrForbidden
 		}
 		if actor.SPPGID == nil || target.SPPGID == nil || *target.SPPGID != *actor.SPPGID {
+			s.deny(ctx, &actor.UserID, "users: cross-sppg forbidden", ip)
 			return nil, domain.ErrForbidden
 		}
 		// Kepala cannot move users outside their SPPG.
 		if in.SPPGID != nil && *in.SPPGID != *actor.SPPGID {
+			s.deny(ctx, &actor.UserID, "users: cross-sppg move forbidden", ip)
 			return nil, domain.ErrForbidden
 		}
 	}
@@ -482,9 +491,11 @@ func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID
 	// A user cannot deactivate or demote itself (MVP-001.5).
 	if actor.UserID == target.ID {
 		if in.Aktif != nil && !*in.Aktif {
+			s.deny(ctx, &actor.UserID, "users: self deactivation forbidden", ip)
 			return nil, domain.ErrSelfModification
 		}
 		if in.Peran != nil && *in.Peran != target.Peran {
+			s.deny(ctx, &actor.UserID, "users: self demotion forbidden", ip)
 			return nil, domain.ErrSelfModification
 		}
 	}
@@ -663,23 +674,86 @@ func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPassword,
 	return nil
 }
 
+// AuditActor is the nested user reference in audit responses (MVP-001.7).
+type AuditActor struct {
+	ID    int64
+	Nama  string
+	Peran string
+}
+
+// AuditLogView pairs an entry with its actor reference.
+type AuditLogView struct {
+	Entry domain.AuditEntry
+	Actor *AuditActor
+}
+
 // ListAuditLogs implements MVP-001.7 with role scoping.
-func (s *Service) ListAuditLogs(ctx context.Context, actor *domain.Claims, filter domain.AuditFilter) ([]domain.AuditEntry, int, error) {
+func (s *Service) ListAuditLogs(ctx context.Context, actor *domain.Claims, filter domain.AuditFilter) ([]AuditLogView, int, error) {
 	if actor == nil {
 		return nil, 0, domain.ErrUnauthorized
 	}
 	if !actor.Role.CanViewAuditLogs() {
+		s.deny(ctx, &actor.UserID, "audit-logs: role not allowed", nil)
 		return nil, 0, domain.ErrForbidden
+	}
+	if err := filter.Validate(); err != nil {
+		return nil, 0, err
 	}
 	filter.Normalize()
 	var scope *int64
 	if actor.Role != domain.RoleAdmin {
 		if actor.SPPGID == nil {
+			s.deny(ctx, &actor.UserID, "audit-logs: missing sppg scope", nil)
 			return nil, 0, domain.ErrForbidden
 		}
 		scope = actor.SPPGID
 	}
-	return s.audits.List(ctx, filter, scope)
+	entries, total, err := s.audits.List(ctx, filter, scope)
+	if err != nil {
+		return nil, 0, err
+	}
+	views := make([]AuditLogView, 0, len(entries))
+	cache := map[int64]*AuditActor{}
+	for _, e := range entries {
+		v := AuditLogView{Entry: e}
+		if e.UserID != nil {
+			actorRef, ok := cache[*e.UserID]
+			if !ok {
+				u, err := s.users.FindByID(ctx, *e.UserID)
+				if err != nil {
+					return nil, 0, fmt.Errorf("find audit actor: %w", err)
+				}
+				if u != nil {
+					actorRef = &AuditActor{ID: u.ID, Nama: u.Nama, Peran: string(u.Peran)}
+					cache[u.ID] = actorRef
+				} else {
+					cache[*e.UserID] = nil
+				}
+			}
+			v.Actor = actorRef
+		}
+		views = append(views, v)
+	}
+	return views, total, nil
+}
+
+// LogDenial records a 403 denial (MVP-001.8, aksi DENY). Best-effort.
+func (s *Service) LogDenial(ctx context.Context, userID *int64, reason string, ip *string) {
+	s.deny(ctx, userID, reason, ip)
+}
+
+func (s *Service) deny(ctx context.Context, userID *int64, reason string, ip *string) {
+	if userID == nil {
+		return
+	}
+	_ = s.audits.Append(ctx, &domain.AuditEntry{
+		UserID:    userID,
+		Aksi:      domain.AuditDeny,
+		Tabel:     domain.AuditTableAuth,
+		DataBaru:  strPtr(mustJSON(map[string]any{"reason": reason})),
+		IPAddress: ip,
+		CreatedAt: s.clock(),
+	})
 }
 
 func (s *Service) checkScopeRefs(ctx context.Context, sppgID *int64, sekolahID *int64, peran domain.Role) error {

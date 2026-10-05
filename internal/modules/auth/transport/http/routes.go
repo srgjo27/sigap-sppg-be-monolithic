@@ -13,9 +13,10 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *Middleware) {
 	manage := mw.RequireRoles(domain.RoleAdmin, domain.RoleKepalaSPPG)
 	canReadAudit := mw.RequireRoles(domain.RoleAdmin, domain.RoleKepalaSPPG, domain.RolePengawas)
 	freshPassword := mw.RequirePasswordChanged()
+	readOnly := mw.PengawasReadOnly()
 
-	rg.POST("/users", mw.Authenticate(), freshPassword, manage, h.CreateUser)
-	rg.PATCH("/users/:id", mw.Authenticate(), freshPassword, manage, h.UpdateUser)
+	rg.POST("/users", mw.Authenticate(), freshPassword, readOnly, manage, h.CreateUser)
+	rg.PATCH("/users/:id", mw.Authenticate(), freshPassword, readOnly, manage, h.UpdateUser)
 
 	auth := rg.Group("/auth")
 	auth.POST("/login", mw.RateLimitLogin(), h.Login)
@@ -24,5 +25,5 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *Middleware) {
 	auth.GET("/me", mw.Authenticate(), h.Me)
 	auth.PUT("/password", mw.Authenticate(), h.ChangePassword)
 
-	rg.GET("/audit-logs", mw.Authenticate(), freshPassword, canReadAudit, h.ListAuditLogs)
+	rg.GET("/audit-logs", mw.Authenticate(), freshPassword, readOnly, canReadAudit, h.ListAuditLogs)
 }

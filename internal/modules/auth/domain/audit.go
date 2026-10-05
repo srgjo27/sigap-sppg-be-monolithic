@@ -10,6 +10,7 @@ const (
 	AuditLogout  = "logout"
 	AuditRefresh = "refresh"
 	AuditPasswd  = "passwd"
+	AuditDeny    = "DENY"
 )
 
 // Audit tables.
@@ -31,13 +32,24 @@ type AuditEntry struct {
 	CreatedAt time.Time
 }
 
-// AuditFilter scopes GET /audit-logs.
+// AuditFilter scopes GET /audit-logs (MVP-001.7).
 type AuditFilter struct {
-	Aksi   *string
-	Tabel  *string
-	UserID *int64
-	Page   int
-	Limit  int
+	Aksi     *string
+	Tabel    *string
+	UserID   *int64
+	RecordID *int64
+	Dari     *time.Time
+	Sampai   *time.Time
+	Page     int
+	Limit    int
+}
+
+// Validate rejects reversed date ranges (400).
+func (f AuditFilter) Validate() error {
+	if f.Dari != nil && f.Sampai != nil && f.Sampai.Before(*f.Dari) {
+		return &ValidationError{Fields: map[string]string{"sampai": "must not be before dari"}}
+	}
+	return nil
 }
 
 // Normalize applies defaults (page 1, limit 20, max 100).

@@ -331,3 +331,97 @@ HTTP 204
 [ ] Other sessions are revoked.
 [ ] Unit tests exist.
 [ ] Integration test exists.
+
+## MVP-001.7 Activity log
+
+### Goal
+
+Kepala SPPG dan pengawas dapat melihat siapa mengubah apa dan kapan, misalnya siapa yang menyetujui batch atau mengubah checklist.
+
+### Actor
+
+admin, kepala_sppg, pengawas
+
+### Input
+
+GET `/api/v1/audit-logs`
+
+- user_id (opsional)
+- tabel (opsional)
+- record_id (opsional)
+- aksi (opsional)
+- dari, sampai (opsional, rentang tanggal)
+- page, per_page (default 1 dan 20, maks 100)
+
+
+### Rules
+- kepala_sppg hanya melihat log milik user di SPPG-nya
+- log bersifat append-only: tidak ada endpoint ubah atau hapus
+- urutan terbaru dulu
+- `data_lama` dan `data_baru` tidak boleh memuat `password_hash` atau token
+
+### Success
+
+HTTP 200
+Returns `data[]` (id, user {id, nama, peran}, aksi, tabel, record_id, data_lama, data_baru, ip_address, created_at) dan `meta` (page, per_page, total)
+
+### Failure
+
+400: invalid input (mis. rentang tanggal terbalik)
+401: tidak login
+403: peran tidak berhak
+500: unexpected internal error
+
+### Acceptance Criteria
+
+[ ] Filters and pagination work.
+[ ] kepala_sppg never sees logs from another SPPG.
+[ ] Sensitive fields are never present in the log.
+[ ] Unit tests exist.
+[ ] Integration test exists.
+
+## MVP-001.8 Role-based access middleware
+
+
+### Goal
+
+Setiap endpoint di semua modul hanya bisa diakses oleh peran yang berhak, dan hanya untuk data SPPG atau sekolahnya sendiri.
+
+### Actor
+
+Sistem (dipasang di semua endpoint terproteksi)
+
+### Input
+
+- header `Authorization: Bearer <access_token>`
+- daftar peran yang diizinkan per route, mis. `RequireRole("kepala_sppg", "admin")`
+- `sppg_id` atau `sekolah_id` dari resource yang diakses
+
+### Rules
+
+- token wajib valid dan belum kedaluwarsa
+- peran pengguna harus ada di daftar peran route
+- pengguna non-admin dan non-pengawas hanya boleh mengakses resource dengan `sppg_id` yang sama dengan miliknya
+- pic_sekolah hanya boleh mengakses resource dengan `sekolah_id` miliknya
+- pengawas hanya boleh metode GET
+- resource milik SPPG lain dijawab 404 (bukan 403) agar keberadaannya tidak bocor
+- setiap penolakan 403 dicatat di audit_log dengan aksi DENY
+
+### Success
+
+Request diteruskan ke handler, dengan `user_id`, `peran`, `sppg_id`, `sekolah_id` tersedia di context
+
+### Failure
+
+401: token tidak ada, tidak valid, atau kedaluwarsa
+403: peran tidak berhak, metode tidak diizinkan, atau wajib ganti password
+404: resource milik SPPG atau sekolah lain
+
+### Acceptance Criteria
+
+[ ] Every protected route declares its allowed roles.
+[ ] Cross-SPPG access returns 404.
+[ ] pengawas cannot call POST, PUT, PATCH, or DELETE.
+[ ] Denials are written to audit_log.
+[ ] Table-driven unit tests cover every role in the matrix.
+[ ] Integration test exists.

@@ -1,8 +1,10 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -210,9 +212,36 @@ func (h *Handler) ListAuditLogs(c *gin.Context) {
 		filter.Tabel = &v
 	}
 	if v := c.Query("user_id"); v != "" {
-		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
-			filter.UserID = &id
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"user_id": "must be an integer"}})
+			return
 		}
+		filter.UserID = &id
+	}
+	if v := c.Query("record_id"); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"record_id": "must be an integer"}})
+			return
+		}
+		filter.RecordID = &id
+	}
+	if v := c.Query("dari"); v != "" {
+		ts, err := parseAuditTime(v, true)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"dari": "use RFC3339 or YYYY-MM-DD"}})
+			return
+		}
+		filter.Dari = &ts
+	}
+	if v := c.Query("sampai"); v != "" {
+		ts, err := parseAuditTime(v, false)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"sampai": "use RFC3339 or YYYY-MM-DD"}})
+			return
+		}
+		filter.Sampai = &ts
 	}
 	if v := c.Query("page"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
@@ -224,18 +253,33 @@ func (h *Handler) ListAuditLogs(c *gin.Context) {
 			filter.Limit = n
 		}
 	}
-	entries, total, err := h.svc.ListAuditLogs(c.Request.Context(), claims, filter)
+	views, total, err := h.svc.ListAuditLogs(c.Request.Context(), claims, filter)
 	if err != nil {
 		MapError(c, err)
 		return
 	}
 	filter.Normalize()
-	items := make([]AuditLogItem, 0, len(entries))
-	for _, e := range entries {
-		items = append(items, toAuditItem(e))
+	items := make([]AuditLogItem, 0, len(views))
+	for _, vw := range views {
+		items = append(items, toAuditItem(vw))
 	}
 	c.JSON(http.StatusOK, AuditLogListResponse{
 		Data: items,
 		Meta: PageMeta{Page: filter.Page, PerPage: filter.Limit, Total: total},
 	})
+}
+
+// parseAuditTime accepts RFC3339 or a YYYY-MM-DD date. Date-only dari is the
+// start of day; date-only sampai is the end of day.
+func parseAuditTime(raw string, isDari bool) (time.Time, error) {
+	if ts, err := time.Parse(time.RFC3339, raw); err == nil {
+		return ts, nil
+	}
+	if d, err := time.Parse("2006-01-02", raw); err == nil {
+		if isDari {
+			return d, nil
+		}
+		return d.Add(24*time.Hour - time.Nanosecond), nil
+	}
+	return time.Time{}, errors.New("invalid audit time")
 }
