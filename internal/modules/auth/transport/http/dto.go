@@ -100,12 +100,19 @@ type MeResponse struct {
 // UpdateUserRequest is PATCH /api/v1/users/:id. Pointers detect omission;
 // send sppg_id/sekolah_id as 0 to clear, no_hp as "" to clear.
 type UpdateUserRequest struct {
-	Nama      *string `json:"nama"`
-	NoHP      *string `json:"no_hp"`
-	Peran     *string `json:"peran"`
-	SPPGID    *int64  `json:"sppg_id"`
-	SekolahID *int64  `json:"sekolah_id"`
-	Aktif     *bool   `json:"aktif"`
+	Nama          *string `json:"nama"`
+	NoHP          *string `json:"no_hp"`
+	Peran         *string `json:"peran"`
+	SPPGID        *int64  `json:"sppg_id"`
+	SekolahID     *int64  `json:"sekolah_id"`
+	Aktif         *bool   `json:"aktif"`
+	ResetPassword *bool   `json:"reset_password"`
+}
+
+// UpdateUserResponse returns the updated user plus a temp password (once).
+type UpdateUserResponse struct {
+	User              UserResponse `json:"user"`
+	PasswordSementara *string      `json:"password_sementara,omitempty"`
 }
 
 // ChangePasswordRequest is PUT /api/v1/auth/password.

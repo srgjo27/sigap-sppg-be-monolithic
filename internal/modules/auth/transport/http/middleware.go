@@ -17,14 +17,16 @@ const claimsKey = "current_user"
 // Middleware holds auth/RBAC/rate-limit dependencies.
 type Middleware struct {
 	tokens  application.TokenIssuer
+	svc     *application.Service
 	mu      sync.Mutex
 	attempt map[string][]time.Time
 	now     func() time.Time
 }
 
 // NewMiddleware builds transport middleware.
-func NewMiddleware(tokens application.TokenIssuer) *Middleware {
-	return &Middleware{tokens: tokens, attempt: map[string][]time.Time{}, now: time.Now}
+// The service is required for the wajib_ganti_password gate (MVP-001.6).
+func NewMiddleware(tokens application.TokenIssuer, svc *application.Service) *Middleware {
+	return &Middleware{tokens: tokens, svc: svc, attempt: map[string][]time.Time{}, now: time.Now}
 }
 
 // CurrentUser extracts claims stored by Authenticate.
@@ -70,6 +72,33 @@ func (m *Middleware) RequireRoles(allowed ...domain.Role) gin.HandlerFunc {
 		}
 		if !set[claims.Role] {
 			c.AbortWithStatusJSON(http.StatusForbidden, ErrorEnvelope{Error: ErrorBody{Code: "FORBIDDEN", Message: "peran tidak berhak"}})
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequirePasswordChanged blocks callers that must change their password
+// first (MVP-001.6). Exempt endpoints (me, logout, password) do not use it.
+func (m *Middleware) RequirePasswordChanged() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		claims, ok := CurrentUser(c)
+		if !ok {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, ErrorEnvelope{Error: ErrorBody{Code: "UNAUTHENTICATED", Message: "tidak login atau token kedaluwarsa"}})
+			return
+		}
+		if m.svc == nil {
+			c.Next()
+			return
+		}
+		profile, err := m.svc.Me(c.Request.Context(), claims.UserID)
+		if err != nil {
+			MapError(c, err)
+			c.Abort()
+			return
+		}
+		if profile.User.WajibGantiPassword {
+			c.AbortWithStatusJSON(http.StatusForbidden, ErrorEnvelope{Error: ErrorBody{Code: "MUST_CHANGE_PASSWORD", Message: "wajib ganti password terlebih dahulu"}})
 			return
 		}
 		c.Next()

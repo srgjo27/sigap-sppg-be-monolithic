@@ -232,3 +232,102 @@ Acceptance Criteria
 [ ] Deactivated user receives 403 even with a valid token.
 [ ] Unit tests exist.
 [ ] Integration test exists.
+
+## MVP-001.5 Update & deactivate user
+
+### Goal
+
+Admin atau kepala SPPG dapat mengubah data, peran, atau menonaktifkan akun, misalnya relawan yang berhenti atau PIC sekolah yang berganti.
+
+### Actor
+
+admin, kepala_sppg
+
+### Input
+
+PATCH `/api/v1/users/{id}` (semua field opsional)
+
+- nama
+- no_hp
+- peran
+- sekolah_id
+- aktif
+- reset_password (boolean)
+
+### Rules
+
+- user tidak dihapus (hard delete dilarang), hanya `aktif = false`, karena dirujuk checklist, PO, dan audit log
+- menonaktifkan user mencabut semua refresh token miliknya
+- kepala_sppg hanya bisa mengubah user di SPPG-nya dan tidak bisa mengubah peran menjadi admin atau pengawas
+- user tidak bisa menonaktifkan atau menurunkan peran dirinya sendiri
+- setiap SPPG harus selalu punya minimal satu kepala_sppg aktif
+- email tidak bisa diubah lewat endpoint ini
+- `reset_password = true` membuat password sementara dan mengaktifkan `wajib_ganti_password`
+- nilai lama dan baru dicatat di audit_log
+
+### Success
+
+HTTP 200
+Returns updated user (+ `password_sementara` bila reset)
+
+### Failure
+
+400: invalid input
+401: tidak login
+403: tidak berhak, user di SPPG lain, atau mengubah diri sendiri
+404: user not found
+409: akan meninggalkan SPPG tanpa kepala_sppg aktif
+500: unexpected internal error
+
+### Acceptance Criteria
+
+[ ] Only allowed fields are updated.
+[ ] Deactivation revokes all sessions immediately.
+[ ] Last active kepala_sppg cannot be deactivated or demoted.
+[ ] Old and new values are stored in audit_log.
+[ ] Unit tests exist.
+[ ] Integration test exists.
+
+## MVP-001.6 Change password
+
+### Goal
+
+Pengguna mengganti password sendiri, wajib dilakukan saat login pertama.
+
+### Actor
+
+Pengguna yang login
+
+### Input
+
+PUT `/api/v1/auth/password`
+
+- password_lama
+- password_baru
+
+### Rules
+
+- password_lama harus benar
+- password_baru minimal 8 karakter, mengandung huruf dan angka, dan tidak sama dengan password_lama
+- berhasil mengganti mengubah `wajib_ganti_password` menjadi false
+- selama `wajib_ganti_password = true`, semua endpoint lain selain endpoint ini, `/auth/me`, dan `/auth/logout` mengembalikan 403
+- mengganti password mencabut semua refresh token lain, kecuali sesi saat ini
+
+### Success
+
+HTTP 204
+
+### Failure
+
+400: invalid input atau password baru tidak memenuhi aturan
+401: tidak login, atau password_lama salah
+500: unexpected internal error
+
+### Acceptance Criteria
+
+[ ] Wrong old password is rejected.
+[ ] Weak or reused password is rejected.
+[ ] First-login users are blocked from other endpoints until they change password.
+[ ] Other sessions are revoked.
+[ ] Unit tests exist.
+[ ] Integration test exists.

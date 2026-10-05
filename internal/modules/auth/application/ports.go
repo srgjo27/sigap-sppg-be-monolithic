@@ -14,14 +14,20 @@ type UserRepository interface {
 	FindByID(ctx context.Context, id int64) (*domain.User, error)
 	Update(ctx context.Context, u *domain.User) (*domain.User, error)
 	EmailExists(ctx context.Context, email string, excludeID *int64) (bool, error)
+	// CountActiveKepala counts active kepala_sppg in an SPPG, excluding a user.
+	CountActiveKepala(ctx context.Context, sppgID int64, excludeID *int64) (int, error)
 }
 
 // RefreshTokenRepository stores hashed refresh tokens.
 type RefreshTokenRepository interface {
 	StoreRefresh(ctx context.Context, t *domain.RefreshToken) (*domain.RefreshToken, error)
 	FindByHash(ctx context.Context, hash string) (*domain.RefreshToken, error)
+	// FindLatestActive returns the newest active token for a user, if any.
+	FindLatestActive(ctx context.Context, userID int64) (*domain.RefreshToken, error)
 	Revoke(ctx context.Context, hash string, now time.Time) error
 	RevokeAllForUser(ctx context.Context, userID int64, now time.Time) error
+	// RevokeAllExcept revokes every active token except the given hash.
+	RevokeAllExcept(ctx context.Context, userID int64, keepHash string, now time.Time) error
 }
 
 // AuditRepository appends and lists audit entries.

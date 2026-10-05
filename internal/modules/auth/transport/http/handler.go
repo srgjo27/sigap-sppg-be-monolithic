@@ -159,22 +159,24 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		r := domain.Role(*req.Peran)
 		peran = &r
 	}
-	updated, err := h.svc.UpdateUser(c.Request.Context(), claims, id, domain.UpdateUserInput{
-		Nama:      req.Nama,
-		NoHP:      req.NoHP,
-		Peran:     peran,
-		SPPGID:    req.SPPGID,
-		SekolahID: req.SekolahID,
-		Aktif:     req.Aktif,
+	res, err := h.svc.UpdateUser(c.Request.Context(), claims, id, domain.UpdateUserInput{
+		Nama:          req.Nama,
+		NoHP:          req.NoHP,
+		Peran:         peran,
+		SPPGID:        req.SPPGID,
+		SekolahID:     req.SekolahID,
+		Aktif:         req.Aktif,
+		ResetPassword: req.ResetPassword,
 	}, clientIP(c))
 	if err != nil {
 		MapError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, toUserResponse(updated))
+	c.JSON(http.StatusOK, UpdateUserResponse{User: toUserResponse(res.User), PasswordSementara: res.TempPassword})
 }
 
 // ChangePassword handles PUT /auth/password (MVP-001.6).
+// Success is HTTP 204 with no body.
 func (h *Handler) ChangePassword(c *gin.Context) {
 	var req ChangePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -190,7 +192,7 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 		MapError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "password updated"})
+	c.Status(http.StatusNoContent)
 }
 
 // ListAuditLogs handles GET /audit-logs (MVP-001.7).

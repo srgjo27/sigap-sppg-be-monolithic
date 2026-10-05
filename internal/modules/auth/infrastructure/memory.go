@@ -156,6 +156,22 @@ func (m *MemoryStores) EmailExists(ctx context.Context, email string, excludeID 
 	return true, nil
 }
 
+// CountActiveKepala implements UserRepository (MVP-001.5 last-kepala guard).
+func (m *MemoryStores) CountActiveKepala(ctx context.Context, sppgID int64, excludeID *int64) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for id, u := range m.users {
+		if excludeID != nil && id == *excludeID {
+			continue
+		}
+		if u.Peran == domain.RoleKepalaSPPG && u.Aktif && u.SPPGID != nil && *u.SPPGID == sppgID {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // StoreRefresh implements RefreshTokenRepository.
 func (m *MemoryStores) StoreRefresh(ctx context.Context, t *domain.RefreshToken) (*domain.RefreshToken, error) {
 	m.mu.Lock()
@@ -200,6 +216,35 @@ func (m *MemoryStores) RevokeAllForUser(ctx context.Context, userID int64, now t
 	defer m.mu.Unlock()
 	for _, t := range m.refresh {
 		if t.UserID == userID && t.RevokedAt == nil {
+			t.RevokedAt = &now
+		}
+	}
+	return nil
+}
+
+// FindLatestActive returns the newest active token for a user, if any.
+func (m *MemoryStores) FindLatestActive(ctx context.Context, userID int64) (*domain.RefreshToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var best *domain.RefreshToken
+	for _, t := range m.refresh {
+		if t.UserID != userID || t.RevokedAt != nil {
+			continue
+		}
+		if best == nil || t.CreatedAt.After(best.CreatedAt) || (t.CreatedAt.Equal(best.CreatedAt) && t.ID > best.ID) {
+			cp := *t
+			best = &cp
+		}
+	}
+	return best, nil
+}
+
+// RevokeAllExcept implements RefreshTokenRepository (MVP-001.6 keep-current).
+func (m *MemoryStores) RevokeAllExcept(ctx context.Context, userID int64, keepHash string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, t := range m.refresh {
+		if t.UserID == userID && t.RevokedAt == nil && t.TokenHash != keepHash {
 			t.RevokedAt = &now
 		}
 	}

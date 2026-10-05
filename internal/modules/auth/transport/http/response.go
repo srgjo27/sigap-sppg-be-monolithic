@@ -56,6 +56,14 @@ func MapError(c *gin.Context, err error) {
 		writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "tidak login atau token kedaluwarsa")
 	case errors.Is(err, domain.ErrAccountInactive):
 		writeError(c, http.StatusForbidden, "ACCOUNT_INACTIVE", "akun nonaktif")
+	case errors.Is(err, domain.ErrMustChangePassword):
+		writeError(c, http.StatusForbidden, "MUST_CHANGE_PASSWORD", "wajib ganti password terlebih dahulu")
+	case errors.Is(err, domain.ErrSelfModification):
+		writeError(c, http.StatusForbidden, "SELF_MODIFICATION", "tidak dapat menonaktifkan atau menurunkan peran sendiri")
+	case errors.Is(err, domain.ErrLastKepalaRequired):
+		writeError(c, http.StatusConflict, "LAST_KEPALA_REQUIRED", "sppg harus memiliki minimal satu kepala_sppg aktif")
+	case errors.Is(err, domain.ErrOldPasswordMismatch):
+		writeError(c, http.StatusUnauthorized, "INVALID_OLD_PASSWORD", "password_lama salah")
 	case errors.Is(err, domain.ErrForbidden):
 		writeError(c, http.StatusForbidden, "FORBIDDEN", "peran tidak berhak")
 	case errors.Is(err, domain.ErrNotFound):

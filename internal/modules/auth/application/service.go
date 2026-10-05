@@ -310,6 +310,9 @@ func (s *Service) Refresh(ctx context.Context, plainRefresh string, ip *string, 
 	if !u.Aktif {
 		return nil, domain.ErrAccountInactive
 	}
+	if u.WajibGantiPassword {
+		return nil, domain.ErrMustChangePassword
+	}
 	if u.IsLocked(now) {
 		return nil, &AccountLockedError{Until: *u.TerkunciSampai}
 	}
@@ -434,8 +437,14 @@ func (s *Service) Me(ctx context.Context, userID int64) (*Profile, error) {
 	return p, nil
 }
 
+// UpdateUserResult carries the updated user plus a reset password (once).
+type UpdateUserResult struct {
+	User         *domain.User
+	TempPassword *string
+}
+
 // UpdateUser implements MVP-001.5.
-func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID int64, in domain.UpdateUserInput, ip *string) (*domain.User, error) {
+func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID int64, in domain.UpdateUserInput, ip *string) (*UpdateUserResult, error) {
 	if actor == nil {
 		return nil, domain.ErrUnauthorized
 	}
@@ -468,6 +477,17 @@ func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID
 		}
 	}
 	oldPeran, oldSPPG, oldSekolah, oldAktif := target.Peran, target.SPPGID, target.SekolahID, target.Aktif
+	oldNama, oldNoHP := target.Nama, target.NoHP
+
+	// A user cannot deactivate or demote itself (MVP-001.5).
+	if actor.UserID == target.ID {
+		if in.Aktif != nil && !*in.Aktif {
+			return nil, domain.ErrSelfModification
+		}
+		if in.Peran != nil && *in.Peran != target.Peran {
+			return nil, domain.ErrSelfModification
+		}
+	}
 
 	if in.Nama != nil {
 		target.Nama = *in.Nama
@@ -501,6 +521,21 @@ func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID
 	if in.Aktif != nil {
 		target.Aktif = *in.Aktif
 	}
+	resetPassword := in.ResetPassword != nil && *in.ResetPassword
+	var tempPassword *string
+	if resetPassword {
+		generated, err := domain.GenerateRandomPassword()
+		if err != nil {
+			return nil, err
+		}
+		hash, err := s.hasher.Hash(generated)
+		if err != nil {
+			return nil, fmt.Errorf("hash password: %w", err)
+		}
+		target.PasswordHash = hash
+		target.WajibGantiPassword = true
+		tempPassword = &generated
+	}
 
 	// Re-validate resulting scope shape.
 	shape := domain.CreateUserInput{
@@ -520,33 +555,69 @@ func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID
 	if err := s.checkScopeRefs(ctx, target.SPPGID, target.SekolahID, target.Peran); err != nil {
 		return nil, err
 	}
+	// Every SPPG keeps at least one active kepala_sppg (MVP-001.5).
+	if oldPeran == domain.RoleKepalaSPPG && oldAktif && oldSPPG != nil {
+		leaving := !target.Aktif || target.Peran != domain.RoleKepalaSPPG || !equalInt64Ptr(target.SPPGID, oldSPPG)
+		if leaving {
+			remaining, err := s.users.CountActiveKepala(ctx, *oldSPPG, &target.ID)
+			if err != nil {
+				return nil, fmt.Errorf("count kepala: %w", err)
+			}
+			if remaining == 0 {
+				return nil, domain.ErrLastKepalaRequired
+			}
+		}
+	}
 	now := s.clock()
 	target.UpdatedAt = now
 	updated, err := s.users.Update(ctx, target)
 	if err != nil {
 		return nil, fmt.Errorf("update user: %w", err)
 	}
-	// Revoke sessions when access scope changes or account deactivated.
-	if !updated.Aktif || updated.Peran != oldPeran || !equalInt64Ptr(updated.SPPGID, oldSPPG) || !equalInt64Ptr(updated.SekolahID, oldSekolah) || oldAktif != updated.Aktif {
+	// Revoke sessions when access scope changes, on deactivation, or on reset.
+	if !updated.Aktif || updated.Peran != oldPeran || !equalInt64Ptr(updated.SPPGID, oldSPPG) || !equalInt64Ptr(updated.SekolahID, oldSekolah) || oldAktif != updated.Aktif || resetPassword {
 		_ = s.refresh.RevokeAllForUser(ctx, updated.ID, now)
+	}
+	oldSnap := map[string]any{
+		"nama":       oldNama,
+		"no_hp":      nullableString(oldNoHP),
+		"peran":      string(oldPeran),
+		"sppg_id":    nullableInt64(oldSPPG),
+		"sekolah_id": nullableInt64(oldSekolah),
+		"aktif":      oldAktif,
+	}
+	newSnap := map[string]any{
+		"nama":       updated.Nama,
+		"no_hp":      nullableString(updated.NoHP),
+		"peran":      string(updated.Peran),
+		"sppg_id":    nullableInt64(updated.SPPGID),
+		"sekolah_id": nullableInt64(updated.SekolahID),
+		"aktif":      updated.Aktif,
+	}
+	if resetPassword {
+		newSnap["reset_password"] = true
 	}
 	_ = s.audits.Append(ctx, &domain.AuditEntry{
 		UserID:    &actor.UserID,
 		Aksi:      domain.AuditUpdate,
 		Tabel:     domain.AuditTableUsers,
 		RecordID:  &updated.ID,
-		DataLama:  strPtr(mustJSON(map[string]any{"peran": string(oldPeran), "aktif": oldAktif})),
-		DataBaru:  strPtr(mustJSON(map[string]any{"peran": string(updated.Peran), "aktif": updated.Aktif})),
+		DataLama:  strPtr(mustJSON(oldSnap)),
+		DataBaru:  strPtr(mustJSON(newSnap)),
 		IPAddress: ip,
 		CreatedAt: now,
 	})
-	return updated, nil
+	return &UpdateUserResult{User: updated, TempPassword: tempPassword}, nil
 }
 
 // ChangePassword implements MVP-001.6.
+// Other sessions are revoked; the newest (current) session is kept.
 func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPassword, newPassword string, ip *string) error {
 	if !domain.ValidatePasswordPolicy(newPassword) {
 		return &domain.ValidationError{Fields: map[string]string{"password_baru": "minimum 8 characters with letters and numbers"}}
+	}
+	if oldPassword == newPassword {
+		return &domain.ValidationError{Fields: map[string]string{"password_baru": "must differ from password_lama"}}
 	}
 	u, err := s.users.FindByID(ctx, userID)
 	if err != nil {
@@ -559,7 +630,7 @@ func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPassword,
 		return domain.ErrAccountInactive
 	}
 	if err := s.hasher.Compare(u.PasswordHash, oldPassword); err != nil {
-		return domain.ErrInvalidCredentials
+		return domain.ErrOldPasswordMismatch
 	}
 	hash, err := s.hasher.Hash(newPassword)
 	if err != nil {
@@ -572,7 +643,15 @@ func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPassword,
 	if _, err := s.users.Update(ctx, u); err != nil {
 		return fmt.Errorf("update password: %w", err)
 	}
-	_ = s.refresh.RevokeAllForUser(ctx, u.ID, now)
+	latest, err := s.refresh.FindLatestActive(ctx, u.ID)
+	if err != nil {
+		return fmt.Errorf("find latest refresh: %w", err)
+	}
+	if latest == nil {
+		_ = s.refresh.RevokeAllForUser(ctx, u.ID, now)
+	} else {
+		_ = s.refresh.RevokeAllExcept(ctx, u.ID, latest.TokenHash, now)
+	}
 	_ = s.audits.Append(ctx, &domain.AuditEntry{
 		UserID:    &u.ID,
 		Aksi:      domain.AuditPasswd,
@@ -653,6 +732,20 @@ func copyStrPtr(p *string) *string {
 }
 
 func strPtr(s string) *string { return &s }
+
+func nullableString(p *string) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func nullableInt64(p *int64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
 
 func mustJSON(v map[string]any) string {
 	b, err := json.Marshal(v)

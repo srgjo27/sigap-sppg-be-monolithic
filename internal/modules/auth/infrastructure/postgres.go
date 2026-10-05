@@ -149,6 +149,16 @@ func (p *Postgres) EmailExists(ctx context.Context, email string, excludeID *int
 	return exists, nil
 }
 
+// CountActiveKepala counts active kepala_sppg in an SPPG, excluding a user.
+func (p *Postgres) CountActiveKepala(ctx context.Context, sppgID int64, excludeID *int64) (int, error) {
+	const q = `SELECT COUNT(*) FROM users WHERE peran='kepala_sppg' AND aktif AND sppg_id=$1 AND ($2::bigint IS NULL OR id<>$2)`
+	var n int
+	if err := p.Pool.QueryRow(ctx, q, sppgID, nullableInt(excludeID)).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count kepala: %w", err)
+	}
+	return n, nil
+}
+
 // StoreRefresh inserts a hashed refresh token.
 func (p *Postgres) StoreRefresh(ctx context.Context, t *domain.RefreshToken) (*domain.RefreshToken, error) {
 	const q = `INSERT INTO refresh_token (user_id, token_hash, user_agent, ip_address, expires_at, created_at)
@@ -209,6 +219,39 @@ func (p *Postgres) RevokeAllForUser(ctx context.Context, userID int64, now time.
 	const q = `UPDATE refresh_token SET revoked_at=$2 WHERE user_id=$1 AND revoked_at IS NULL`
 	if _, err := p.Pool.Exec(ctx, q, userID, now); err != nil {
 		return fmt.Errorf("revoke all refresh: %w", err)
+	}
+	return nil
+}
+
+// FindLatestActive returns the newest active token for a user, if any.
+func (p *Postgres) FindLatestActive(ctx context.Context, userID int64) (*domain.RefreshToken, error) {
+	const q = `SELECT id, user_id, token_hash, user_agent, ip_address::text, expires_at, revoked_at, created_at
+		FROM refresh_token WHERE user_id=$1 AND revoked_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 1`
+	var t domain.RefreshToken
+	var ua, ip sql.NullString
+	var revoked sql.NullTime
+	if err := p.Pool.QueryRow(ctx, q, userID).Scan(&t.ID, &t.UserID, &t.TokenHash, &ua, &ip, &t.ExpiresAt, &revoked, &t.CreatedAt); err != nil {
+		if isNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find latest refresh: %w", err)
+	}
+	if ua.Valid {
+		v := ua.String
+		t.UserAgent = &v
+	}
+	if ip.Valid {
+		v := ip.String
+		t.IPAddress = &v
+	}
+	return &t, nil
+}
+
+// RevokeAllExcept revokes every active token except the given hash.
+func (p *Postgres) RevokeAllExcept(ctx context.Context, userID int64, keepHash string, now time.Time) error {
+	const q = `UPDATE refresh_token SET revoked_at=$3 WHERE user_id=$1 AND revoked_at IS NULL AND token_hash<>$2`
+	if _, err := p.Pool.Exec(ctx, q, userID, keepHash, now); err != nil {
+		return fmt.Errorf("revoke other refresh: %w", err)
 	}
 	return nil
 }

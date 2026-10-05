@@ -33,7 +33,7 @@ func newHTTPFixture() *httpFixture {
 		Tokens: issuer, Hasher: infrastructure.NewBcryptHasher(4),
 	})
 	h := NewHandler(svc)
-	mw := NewMiddleware(issuer)
+	mw := NewMiddleware(issuer, svc)
 	r := gin.New()
 	v1 := r.Group("/api/v1")
 	RegisterRoutes(v1, h, mw)
@@ -64,17 +64,45 @@ func seedAdminAndLogin(t *testing.T, f *httpFixture, sppg *int64, email, passwor
 	t.Helper()
 	ctx := context.Background()
 	adminClaims := &domain.Claims{UserID: 999, Role: domain.RoleAdmin}
-	_, err := f.svc.CreateUser(ctx, adminClaims, domain.CreateUserInput{
+	created, err := f.svc.CreateUser(ctx, adminClaims, domain.CreateUserInput{
 		Nama: "Seed User", Email: email, Peran: role, SPPGID: sppg, PasswordAwal: &password,
 	}, nil)
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
+	// Seed admins simulate users who already changed their initial password,
+	// otherwise the wajib_ganti_password gate (MVP-001.6) blocks management APIs.
+	clearWajib(t, f, created.User.ID)
 	login, err := f.svc.Login(ctx, email, password, nil, nil)
 	if err != nil {
 		t.Fatalf("seed login: %v", err)
 	}
 	return login.AccessToken
+}
+
+// clearWajib clears the wajib_ganti_password flag directly in the store.
+func clearWajib(t *testing.T, f *httpFixture, userID int64) {
+	t.Helper()
+	ctx := context.Background()
+	u, err := f.stores.FindByID(ctx, userID)
+	if err != nil || u == nil {
+		t.Fatalf("clearWajib: %v", err)
+	}
+	u.WajibGantiPassword = false
+	if _, err := f.stores.Update(ctx, u); err != nil {
+		t.Fatalf("clearWajib update: %v", err)
+	}
+}
+
+// clearWajibByEmail clears the flag for a user looked up by email.
+func clearWajibByEmail(t *testing.T, f *httpFixture, email string) {
+	t.Helper()
+	ctx := context.Background()
+	u, err := f.stores.FindByEmail(ctx, email)
+	if err != nil || u == nil {
+		t.Fatalf("clearWajibByEmail: %v", err)
+	}
+	clearWajib(t, f, u.ID)
 }
 
 func TestCreateUserEndpoint(t *testing.T) {
@@ -160,6 +188,23 @@ func TestLoginMeRefreshLogoutFlow(t *testing.T) {
 		t.Fatalf("bad login: got %d", badLogin.Code)
 	}
 
+	// Fresh accounts must change password first: refresh is gated (403).
+	gated := doRequest(t, f.router, "POST", "/api/v1/auth/refresh", "", map[string]any{"refresh_token": sess.RefreshToken})
+	if gated.Code != http.StatusForbidden {
+		t.Fatalf("gated refresh: got %d %s", gated.Code, gated.Body.String())
+	}
+	gatedManage := doRequest(t, f.router, "POST", "/api/v1/users", sess.AccessToken, map[string]any{
+		"nama": "X", "email": "x@x.com", "peran": "akuntan", "sppg_id": 1,
+	})
+	if gatedManage.Code != http.StatusForbidden {
+		t.Fatalf("gated manage: got %d", gatedManage.Code)
+	}
+
+	pw := doRequest(t, f.router, "PUT", "/api/v1/auth/password", sess.AccessToken, map[string]any{"password_lama": "kasir123", "password_baru": "kasir456"})
+	if pw.Code != http.StatusNoContent {
+		t.Fatalf("change pw: %d %s", pw.Code, pw.Body.String())
+	}
+
 	refresh := doRequest(t, f.router, "POST", "/api/v1/auth/refresh", "", map[string]any{"refresh_token": sess.RefreshToken})
 	if refresh.Code != http.StatusOK {
 		t.Fatalf("refresh: %d %s", refresh.Code, refresh.Body.String())
@@ -189,6 +234,7 @@ func TestRefreshReuseTriggersTheftDetection(t *testing.T) {
 	_ = doRequest(t, f.router, "POST", "/api/v1/users", adminSess.AccessToken, map[string]any{
 		"nama": "Korban", "email": "korban@x.com", "peran": "akuntan", "sppg_id": 1, "password_awal": "korban12",
 	})
+	clearWajibByEmail(t, f, "korban@x.com")
 	login := doRequest(t, f.router, "POST", "/api/v1/auth/login", "", map[string]any{"email": "korban@x.com", "password": "korban12"})
 	var first LoginResponse
 	_ = json.Unmarshal(login.Body.Bytes(), &first)
@@ -216,6 +262,7 @@ func TestLogoutAllRevokesEverySession(t *testing.T) {
 	_ = doRequest(t, f.router, "POST", "/api/v1/users", adminSess.AccessToken, map[string]any{
 		"nama": "Multi", "email": "multi@x.com", "peran": "akuntan", "sppg_id": 1, "password_awal": "multi123",
 	})
+	clearWajibByEmail(t, f, "multi@x.com")
 	l1 := doRequest(t, f.router, "POST", "/api/v1/auth/login", "", map[string]any{"email": "multi@x.com", "password": "multi123"})
 	var s1 LoginResponse
 	_ = json.Unmarshal(l1.Body.Bytes(), &s1)
@@ -253,9 +300,24 @@ func TestUpdatePasswordAndAuditRBAC(t *testing.T) {
 	login := doRequest(t, f.router, "POST", "/api/v1/auth/login", "", map[string]any{"email": "dapurb@x.com", "password": "dapur123"})
 	var sess LoginResponse
 	_ = json.Unmarshal(login.Body.Bytes(), &sess)
+	weak := doRequest(t, f.router, "PUT", "/api/v1/auth/password", sess.AccessToken, map[string]any{"password_lama": "dapur123", "password_baru": "lemah"})
+	if weak.Code != http.StatusBadRequest {
+		t.Fatalf("weak pw: got %d", weak.Code)
+	}
+	same := doRequest(t, f.router, "PUT", "/api/v1/auth/password", sess.AccessToken, map[string]any{"password_lama": "dapur123", "password_baru": "dapur123"})
+	if same.Code != http.StatusBadRequest {
+		t.Fatalf("reused pw: got %d", same.Code)
+	}
+	wrongOld := doRequest(t, f.router, "PUT", "/api/v1/auth/password", sess.AccessToken, map[string]any{"password_lama": "salah123", "password_baru": "baru1234"})
+	if wrongOld.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong old pw: got %d", wrongOld.Code)
+	}
 	pw := doRequest(t, f.router, "PUT", "/api/v1/auth/password", sess.AccessToken, map[string]any{"password_lama": "dapur123", "password_baru": "baru1234"})
-	if pw.Code != http.StatusOK {
+	if pw.Code != http.StatusNoContent {
 		t.Fatalf("change pw: %d %s", pw.Code, pw.Body.String())
+	}
+	if pw.Body.Len() != 0 {
+		t.Fatalf("change pw must have no body, got %q", pw.Body.String())
 	}
 
 	// Non-privileged cannot read audit logs.
@@ -273,6 +335,68 @@ func TestUpdatePasswordAndAuditRBAC(t *testing.T) {
 	}
 	if list.Meta.Total == 0 || len(list.Data) == 0 {
 		t.Fatal("expected audit rows")
+	}
+}
+
+func TestUpdateUserResetSelfAndLastKepala(t *testing.T) {
+	f := newHTTPFixture()
+	adminToken := seedAdminAndLogin(t, f, ptrInt(1), "admin4@x.com", "admin1234", domain.RoleAdmin)
+
+	// Admin cannot deactivate itself.
+	adminMe := doRequest(t, f.router, "GET", "/api/v1/auth/me", adminToken, nil)
+	var adminProfile MeResponse
+	_ = json.Unmarshal(adminMe.Body.Bytes(), &adminProfile)
+	selfOff := doRequest(t, f.router, "PATCH", "/api/v1/users/"+itoa(adminProfile.ID), adminToken, map[string]any{"aktif": false})
+	if selfOff.Code != http.StatusForbidden {
+		t.Fatalf("self deactivate: got %d %s", selfOff.Code, selfOff.Body.String())
+	}
+
+	// Create two kepala in SPPG 1: deactivating one is fine, the last is 409.
+	k1 := doRequest(t, f.router, "POST", "/api/v1/users", adminToken, map[string]any{
+		"nama": "Kepala Satu", "email": "kepala1@x.com", "peran": "kepala_sppg", "sppg_id": 1, "password_awal": "kepala123",
+	})
+	var k1Res CreateUserResponse
+	_ = json.Unmarshal(k1.Body.Bytes(), &k1Res)
+	k2 := doRequest(t, f.router, "POST", "/api/v1/users", adminToken, map[string]any{
+		"nama": "Kepala Dua", "email": "kepala2@x.com", "peran": "kepala_sppg", "sppg_id": 1, "password_awal": "kepala123",
+	})
+	var k2Res CreateUserResponse
+	_ = json.Unmarshal(k2.Body.Bytes(), &k2Res)
+
+	off1 := doRequest(t, f.router, "PATCH", "/api/v1/users/"+itoa(k1Res.User.ID), adminToken, map[string]any{"aktif": false})
+	if off1.Code != http.StatusOK {
+		t.Fatalf("deactivate first kepala: %d %s", off1.Code, off1.Body.String())
+	}
+	offLast := doRequest(t, f.router, "PATCH", "/api/v1/users/"+itoa(k2Res.User.ID), adminToken, map[string]any{"aktif": false})
+	if offLast.Code != http.StatusConflict {
+		t.Fatalf("deactivate last kepala: got %d %s", offLast.Code, offLast.Body.String())
+	}
+	demoteLast := doRequest(t, f.router, "PATCH", "/api/v1/users/"+itoa(k2Res.User.ID), adminToken, map[string]any{"peran": "akuntan"})
+	if demoteLast.Code != http.StatusConflict {
+		t.Fatalf("demote last kepala: got %d %s", demoteLast.Code, demoteLast.Body.String())
+	}
+
+	// Reset password returns a temporary password once.
+	reset := doRequest(t, f.router, "PATCH", "/api/v1/users/"+itoa(k2Res.User.ID), adminToken, map[string]any{"reset_password": true})
+	if reset.Code != http.StatusOK {
+		t.Fatalf("reset: %d %s", reset.Code, reset.Body.String())
+	}
+	var resetRes UpdateUserResponse
+	if err := json.Unmarshal(reset.Body.Bytes(), &resetRes); err != nil {
+		t.Fatal(err)
+	}
+	if resetRes.PasswordSementara == nil || *resetRes.PasswordSementara == "" {
+		t.Fatal("expected password_sementara")
+	}
+	// Temp password works for login and forces wajib flag.
+	login := doRequest(t, f.router, "POST", "/api/v1/auth/login", "", map[string]any{"email": "kepala2@x.com", "password": *resetRes.PasswordSementara})
+	if login.Code != http.StatusOK {
+		t.Fatalf("login with temp pw: %d %s", login.Code, login.Body.String())
+	}
+	var sess LoginResponse
+	_ = json.Unmarshal(login.Body.Bytes(), &sess)
+	if !sess.WajibGantiPassword {
+		t.Fatal("reset must set wajib_ganti_password")
 	}
 }
 

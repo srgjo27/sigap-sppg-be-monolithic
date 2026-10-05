@@ -203,12 +203,13 @@ func ValidateCreate(in CreateUserInput) error {
 
 // UpdateUserInput is the domain patch for MVP-001.5. Nil pointers mean no change.
 type UpdateUserInput struct {
-	Nama      *string
-	NoHP      *string
-	Peran     *Role
-	SPPGID    *int64
-	SekolahID *int64
-	Aktif     *bool
+	Nama          *string
+	NoHP          *string
+	Peran         *Role
+	SPPGID        *int64
+	SekolahID     *int64
+	Aktif         *bool
+	ResetPassword *bool
 }
 
 // ValidateUpdate checks patch shape.

@@ -71,7 +71,7 @@ func main() {
 	})
 
 	handler := authhttp.NewHandler(svc)
-	mw := authhttp.NewMiddleware(issuer)
+	mw := authhttp.NewMiddleware(issuer, svc)
 
 	router := server.New(cfg, server.Deps{
 		AuthHandler:    handler,

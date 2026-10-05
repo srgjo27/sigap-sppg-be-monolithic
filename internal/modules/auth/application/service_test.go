@@ -40,6 +40,20 @@ func (f *testFixture) advance(d time.Duration) {
 	f.now = f.now.Add(d)
 }
 
+// clearWajib clears wajib_ganti_password so refresh flows can be tested
+// independently of the first-login gate (MVP-001.6).
+func (f *testFixture) clearWajib(t *testing.T, userID int64) {
+	t.Helper()
+	u, err := f.stores.FindByID(context.Background(), userID)
+	if err != nil || u == nil {
+		t.Fatalf("clearWajib: %v", err)
+	}
+	u.WajibGantiPassword = false
+	if _, err := f.stores.Update(context.Background(), u); err != nil {
+		t.Fatalf("clearWajib update: %v", err)
+	}
+}
+
 func adminClaims(sppg *int64) *domain.Claims {
 	return &domain.Claims{UserID: 999, Role: domain.RoleAdmin, SPPGID: sppg}
 }
@@ -187,12 +201,13 @@ func TestRefreshRotationAndLogout(t *testing.T) {
 	f := newTestFixture()
 	ctx := context.Background()
 	sppg := int64(1)
-	_, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+	created, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
 		Nama: "Refresh User", Email: "refresh@x.com", Peran: domain.RoleAkuntan, SPPGID: &sppg, PasswordAwal: ptr("refresh1"),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.clearWajib(t, created.User.ID)
 	login, err := f.svc.Login(ctx, "refresh@x.com", "refresh1", nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -203,11 +218,6 @@ func TestRefreshRotationAndLogout(t *testing.T) {
 	}
 	if rotated.RefreshToken == login.RefreshToken {
 		t.Fatal("refresh token must rotate")
-	}
-	// Old token revoked.
-	_, err = f.svc.Refresh(ctx, login.RefreshToken, nil, nil)
-	if err != domain.ErrRefreshRevoked {
-		t.Fatalf("expected revoked old token, got %v", err)
 	}
 	// Logout new token then refresh fails.
 	if err := f.svc.Logout(ctx, rotated.RefreshToken, nil); err != nil {
@@ -236,13 +246,30 @@ func TestChangePasswordAndMe(t *testing.T) {
 	if !login.WajibGantiPassword {
 		t.Fatal("new user must have wajib_ganti_password=true")
 	}
+	// Wrong old password is rejected with a dedicated sentinel.
+	if err := f.svc.ChangePassword(ctx, created.User.ID, "salah123", "baru1234", nil); err != domain.ErrOldPasswordMismatch {
+		t.Fatalf("expected old mismatch, got %v", err)
+	}
+	// Weak and reused passwords are rejected.
+	if err := f.svc.ChangePassword(ctx, created.User.ID, "lama1234", "lemah", nil); err == nil {
+		t.Fatal("expected weak rejection")
+	}
+	if err := f.svc.ChangePassword(ctx, created.User.ID, "lama1234", "lama1234", nil); err == nil {
+		t.Fatal("expected reuse rejection")
+	}
+	// Second session: only other sessions are revoked, current survives.
+	second, err := f.svc.Login(ctx, "ganti@x.com", "lama1234", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := f.svc.ChangePassword(ctx, created.User.ID, "lama1234", "baru1234", nil); err != nil {
 		t.Fatalf("change password: %v", err)
 	}
-	// Old refresh revoked after password change.
-	_, err = f.svc.Refresh(ctx, login.RefreshToken, nil, nil)
-	if err != domain.ErrRefreshRevoked {
-		t.Fatalf("expected revocation after password change, got %v", err)
+	if _, err := f.svc.Refresh(ctx, second.RefreshToken, nil, nil); err != nil {
+		t.Fatalf("current session must survive, got %v", err)
+	}
+	if _, err := f.svc.Refresh(ctx, login.RefreshToken, nil, nil); err != domain.ErrRefreshRevoked {
+		t.Fatalf("expected other session revoked, got %v", err)
 	}
 	profile, err := f.svc.Me(ctx, created.User.ID)
 	if err != nil {
@@ -263,12 +290,13 @@ func TestRefreshReuseRevokesAllSessions(t *testing.T) {
 	f := newTestFixture()
 	ctx := context.Background()
 	sppg := int64(1)
-	_, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+	created, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
 		Nama: "Theft User", Email: "theft@x.com", Peran: domain.RoleAkuntan, SPPGID: &sppg, PasswordAwal: ptr("theft123"),
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.clearWajib(t, created.User.ID)
 	first, err := f.svc.Login(ctx, "theft@x.com", "theft123", nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -299,6 +327,7 @@ func TestLogoutAllRevokesEverySession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	f.clearWajib(t, created.User.ID)
 	a, err := f.svc.Login(ctx, "multi@x.com", "multi123", nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -345,6 +374,124 @@ func TestMeEnrichedWithNames(t *testing.T) {
 	}
 	if len(profile.Permissions) == 0 {
 		t.Fatal("expected permissions")
+	}
+}
+
+func TestUpdateUserResetPassword(t *testing.T) {
+	f := newTestFixture()
+	ctx := context.Background()
+	sppg := int64(1)
+	created, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+		Nama: "Reset User", Email: "reset@x.com", Peran: domain.RoleAkuntan, SPPGID: &sppg, PasswordAwal: ptr("reset123"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.clearWajib(t, created.User.ID)
+	before, err := f.svc.Login(ctx, "reset@x.com", "reset123", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.svc.UpdateUser(ctx, adminClaims(nil), created.User.ID, domain.UpdateUserInput{ResetPassword: ptr(true)}, nil)
+	if err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if res.TempPassword == nil || !domain.ValidatePasswordPolicy(*res.TempPassword) {
+		t.Fatalf("expected policy-compliant temp password, got %v", res.TempPassword)
+	}
+	if !res.User.WajibGantiPassword {
+		t.Fatal("reset must set wajib_ganti_password")
+	}
+	// Old password stops working, temp password works, old session dies.
+	if _, err := f.svc.Login(ctx, "reset@x.com", "reset123", nil, nil); err != domain.ErrInvalidCredentials {
+		t.Fatalf("old pw must fail, got %v", err)
+	}
+	login, err := f.svc.Login(ctx, "reset@x.com", *res.TempPassword, nil, nil)
+	if err != nil {
+		t.Fatalf("temp pw login: %v", err)
+	}
+	if !login.WajibGantiPassword {
+		t.Fatal("temp login must require password change")
+	}
+	if _, err := f.svc.Refresh(ctx, before.RefreshToken, nil, nil); err != domain.ErrRefreshRevoked {
+		t.Fatalf("old session must die, got %v", err)
+	}
+}
+
+func TestUpdateUserSelfGuard(t *testing.T) {
+	f := newTestFixture()
+	ctx := context.Background()
+	sppg := int64(1)
+	created, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+		Nama: "Kepala", Email: "kepala@x.com", Peran: domain.RoleKepalaSPPG, SPPGID: &sppg, PasswordAwal: ptr("kepala12"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	self := &domain.Claims{UserID: created.User.ID, Role: domain.RoleKepalaSPPG, SPPGID: &sppg}
+	if _, err := f.svc.UpdateUser(ctx, self, created.User.ID, domain.UpdateUserInput{Aktif: ptr(false)}, nil); err != domain.ErrSelfModification {
+		t.Fatalf("self deactivate: got %v", err)
+	}
+	demote := domain.RoleAkuntan
+	if _, err := f.svc.UpdateUser(ctx, self, created.User.ID, domain.UpdateUserInput{Peran: &demote}, nil); err != domain.ErrSelfModification {
+		t.Fatalf("self demote: got %v", err)
+	}
+	// Editing own name is allowed.
+	res, err := f.svc.UpdateUser(ctx, self, created.User.ID, domain.UpdateUserInput{Nama: ptr("Kepala Baru")}, nil)
+	if err != nil {
+		t.Fatalf("self rename: %v", err)
+	}
+	if res.User.Nama != "Kepala Baru" {
+		t.Fatalf("nama %q", res.User.Nama)
+	}
+}
+
+func TestUpdateUserLastKepalaGuard(t *testing.T) {
+	f := newTestFixture()
+	ctx := context.Background()
+	sppg := int64(1)
+	k1, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+		Nama: "Kepala Satu", Email: "k1@x.com", Peran: domain.RoleKepalaSPPG, SPPGID: &sppg, PasswordAwal: ptr("kepala12"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k2, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+		Nama: "Kepala Dua", Email: "k2@x.com", Peran: domain.RoleKepalaSPPG, SPPGID: &sppg, PasswordAwal: ptr("kepala12"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Deactivating one of two is fine.
+	if _, err := f.svc.UpdateUser(ctx, adminClaims(nil), k1.User.ID, domain.UpdateUserInput{Aktif: ptr(false)}, nil); err != nil {
+		t.Fatalf("first deactivate: %v", err)
+	}
+	// The last one cannot go.
+	if _, err := f.svc.UpdateUser(ctx, adminClaims(nil), k2.User.ID, domain.UpdateUserInput{Aktif: ptr(false)}, nil); err != domain.ErrLastKepalaRequired {
+		t.Fatalf("last deactivate: got %v", err)
+	}
+	demote := domain.RoleAkuntan
+	if _, err := f.svc.UpdateUser(ctx, adminClaims(nil), k2.User.ID, domain.UpdateUserInput{Peran: &demote}, nil); err != domain.ErrLastKepalaRequired {
+		t.Fatalf("last demote: got %v", err)
+	}
+}
+
+func TestRefreshBlockedWhenWajib(t *testing.T) {
+	f := newTestFixture()
+	ctx := context.Background()
+	sppg := int64(1)
+	_, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+		Nama: "Fresh User", Email: "fresh@x.com", Peran: domain.RoleAkuntan, SPPGID: &sppg, PasswordAwal: ptr("fresh123"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login, err := f.svc.Login(ctx, "fresh@x.com", "fresh123", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Refresh(ctx, login.RefreshToken, nil, nil); err != domain.ErrMustChangePassword {
+		t.Fatalf("expected must-change, got %v", err)
 	}
 }
 

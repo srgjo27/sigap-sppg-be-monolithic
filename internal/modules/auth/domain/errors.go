@@ -18,4 +18,8 @@ var (
 	ErrSPPGNotFound         = errors.New("sppg not found")
 	ErrSekolahNotFound      = errors.New("sekolah not found")
 	ErrSekolahScopeMismatch = errors.New("sekolah does not belong to sppg")
+	ErrMustChangePassword   = errors.New("password change required")
+	ErrSelfModification     = errors.New("cannot deactivate or demote self")
+	ErrLastKepalaRequired   = errors.New("sppg must retain an active kepala_sppg")
+	ErrOldPasswordMismatch  = errors.New("old password is incorrect")
 )
