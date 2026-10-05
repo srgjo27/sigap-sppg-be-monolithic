@@ -18,7 +18,9 @@ type MemoryStores struct {
 	refresh       map[string]*domain.RefreshToken
 	audits        []domain.AuditEntry
 	sppg          map[int64]bool
+	sppgNames     map[int64]string
 	sekolahOwner  map[int64]int64
+	sekolahNames  map[int64]string
 	nextUserID    int64
 	nextRefreshID int64
 	nextAuditID   int64
@@ -31,7 +33,9 @@ func NewMemoryStores() *MemoryStores {
 		emailIndex:    map[string]int64{},
 		refresh:       map[string]*domain.RefreshToken{},
 		sppg:          map[int64]bool{},
+		sppgNames:     map[int64]string{},
 		sekolahOwner:  map[int64]int64{},
+		sekolahNames:  map[int64]string{},
 		nextUserID:    1,
 		nextRefreshID: 1,
 		nextAuditID:   1,
@@ -40,18 +44,38 @@ func NewMemoryStores() *MemoryStores {
 
 // SeedSPPG registers an SPPG id as existing.
 func (m *MemoryStores) SeedSPPG(id int64) {
+	m.SeedSPPGWithName(id, defaultSPPGName(id))
+}
+
+// SeedSPPGWithName registers an SPPG id with a display name.
+func (m *MemoryStores) SeedSPPGWithName(id int64, nama string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sppg[id] = true
+	if nama != "" {
+		m.sppgNames[id] = nama
+	}
 }
 
 // SeedSekolah registers sekolah -> sppg ownership.
 func (m *MemoryStores) SeedSekolah(sekolahID, sppgID int64) {
+	m.SeedSekolahWithName(sekolahID, sppgID, defaultSekolahName(sekolahID))
+}
+
+// SeedSekolahWithName registers sekolah ownership with a display name.
+func (m *MemoryStores) SeedSekolahWithName(sekolahID, sppgID int64, nama string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sppg[sppgID] = true
 	m.sekolahOwner[sekolahID] = sppgID
+	if nama != "" {
+		m.sekolahNames[sekolahID] = nama
+	}
 }
+
+func defaultSPPGName(id int64) string { return "SPPG " + itoa(id) }
+
+func defaultSekolahName(id int64) string { return "Sekolah " + itoa(id) }
 
 // CreateUser implements UserRepository.
 func (m *MemoryStores) CreateUser(ctx context.Context, u *domain.User) (*domain.User, error) {
@@ -241,10 +265,60 @@ func (m *MemoryStores) Exists(ctx context.Context, id int64) (bool, error) {
 	return m.sppg[id], nil
 }
 
+// GetSPPG implements SPPGChecker name lookup.
+func (m *MemoryStores) GetSPPG(ctx context.Context, id int64) (*domain.SPPGInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.sppg[id] {
+		return nil, nil
+	}
+	nama, ok := m.sppgNames[id]
+	if !ok {
+		nama = defaultSPPGName(id)
+	}
+	return &domain.SPPGInfo{ID: id, Nama: nama}, nil
+}
+
 // FindOwner implements SekolahChecker.
 func (m *MemoryStores) FindOwner(ctx context.Context, sekolahID int64) (bool, int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	owner, ok := m.sekolahOwner[sekolahID]
 	return ok, owner, nil
+}
+
+// GetSekolah implements SekolahChecker name lookup.
+func (m *MemoryStores) GetSekolah(ctx context.Context, id int64) (*domain.SekolahInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.sekolahOwner[id]; !ok {
+		return nil, nil
+	}
+	nama, ok := m.sekolahNames[id]
+	if !ok {
+		nama = defaultSekolahName(id)
+	}
+	return &domain.SekolahInfo{ID: id, Nama: nama}, nil
+}
+
+func itoa(v int64) string {
+	if v == 0 {
+		return "0"
+	}
+	neg := v < 0
+	if neg {
+		v = -v
+	}
+	var buf [20]byte
+	i := len(buf)
+	for v > 0 {
+		i--
+		buf[i] = byte('0' + v%10)
+		v /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
 }

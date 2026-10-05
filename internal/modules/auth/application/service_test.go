@@ -244,14 +244,106 @@ func TestChangePasswordAndMe(t *testing.T) {
 	if err != domain.ErrRefreshRevoked {
 		t.Fatalf("expected revocation after password change, got %v", err)
 	}
-	u, perms, err := f.svc.Me(ctx, created.User.ID)
+	profile, err := f.svc.Me(ctx, created.User.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.WajibGantiPassword {
+	if profile.User.WajibGantiPassword {
 		t.Fatal("wajib_ganti_password should be false after change")
 	}
-	if len(perms) == 0 {
+	if len(profile.Permissions) == 0 {
+		t.Fatal("expected permissions")
+	}
+	if profile.SPPG == nil || profile.SPPG.ID != 1 {
+		t.Fatalf("expected sppg ref, got %+v", profile.SPPG)
+	}
+}
+
+func TestRefreshReuseRevokesAllSessions(t *testing.T) {
+	f := newTestFixture()
+	ctx := context.Background()
+	sppg := int64(1)
+	_, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+		Nama: "Theft User", Email: "theft@x.com", Peran: domain.RoleAkuntan, SPPGID: &sppg, PasswordAwal: ptr("theft123"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := f.svc.Login(ctx, "theft@x.com", "theft123", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := f.svc.Refresh(ctx, first.RefreshToken, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Attacker reuses the already-rotated first token: theft detection
+	// must revoke every session, so the second token dies too.
+	_, err = f.svc.Refresh(ctx, first.RefreshToken, nil, nil)
+	if err != domain.ErrRefreshRevoked {
+		t.Fatalf("expected revoked on reuse, got %v", err)
+	}
+	_, err = f.svc.Refresh(ctx, second.RefreshToken, nil, nil)
+	if err != domain.ErrRefreshRevoked {
+		t.Fatalf("expected all sessions revoked after reuse, got %v", err)
+	}
+}
+
+func TestLogoutAllRevokesEverySession(t *testing.T) {
+	f := newTestFixture()
+	ctx := context.Background()
+	sppg := int64(1)
+	created, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+		Nama: "Multi User", Email: "multi@x.com", Peran: domain.RoleAkuntan, SPPGID: &sppg, PasswordAwal: ptr("multi123"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := f.svc.Login(ctx, "multi@x.com", "multi123", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := f.svc.Login(ctx, "multi@x.com", "multi123", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.LogoutAll(ctx, created.User.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	for i, tok := range []string{a.RefreshToken, b.RefreshToken} {
+		if _, err := f.svc.Refresh(ctx, tok, nil, nil); err != domain.ErrRefreshRevoked {
+			t.Fatalf("session %d: expected revoked after logout-all, got %v", i, err)
+		}
+	}
+}
+
+func TestMeEnrichedWithNames(t *testing.T) {
+	f := newTestFixture()
+	f.stores.SeedSPPGWithName(1, "SPPG Cempaka")
+	f.stores.SeedSekolahWithName(10, 1, "SDN 01")
+	ctx := context.Background()
+	sppg := int64(1)
+	sekolah := int64(10)
+	created, err := f.svc.CreateUser(ctx, adminClaims(nil), domain.CreateUserInput{
+		Nama: "PIC Sekolah", Email: "pics@x.com", Peran: domain.RolePICsekolah, SPPGID: &sppg, SekolahID: &sekolah, PasswordAwal: ptr("pics1234"),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := f.svc.Me(ctx, created.User.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.SPPG == nil || profile.SPPG.Nama != "SPPG Cempaka" {
+		t.Fatalf("expected sppg name, got %+v", profile.SPPG)
+	}
+	if profile.Sekolah == nil || profile.Sekolah.Nama != "SDN 01" {
+		t.Fatalf("expected sekolah name, got %+v", profile.Sekolah)
+	}
+	if !profile.User.WajibGantiPassword {
+		t.Fatal("new user must require password change")
+	}
+	if len(profile.Permissions) == 0 {
 		t.Fatal("expected permissions")
 	}
 }

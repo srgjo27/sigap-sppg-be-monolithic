@@ -97,7 +97,23 @@ func (h *Handler) Refresh(c *gin.Context) {
 }
 
 // Logout handles POST /auth/logout (MVP-001.3).
+// Without query params it revokes the refresh token in the body.
+// With ?all=true it revokes every session of the caller.
+// Success is HTTP 204 with no body.
 func (h *Handler) Logout(c *gin.Context) {
+	claims, ok := CurrentUser(c)
+	if !ok {
+		MapError(c, domain.ErrUnauthorized)
+		return
+	}
+	if c.Query("all") == "true" {
+		if err := h.svc.LogoutAll(c.Request.Context(), claims.UserID, clientIP(c)); err != nil {
+			MapError(c, err)
+			return
+		}
+		c.Status(http.StatusNoContent)
+		return
+	}
 	var req LogoutRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		MapError(c, &domain.ValidationError{Fields: map[string]string{"refresh_token": "required"}})
@@ -107,7 +123,7 @@ func (h *Handler) Logout(c *gin.Context) {
 		MapError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "logged out"})
+	c.Status(http.StatusNoContent)
 }
 
 // Me handles GET /auth/me (MVP-001.4).
@@ -117,12 +133,12 @@ func (h *Handler) Me(c *gin.Context) {
 		MapError(c, domain.ErrUnauthorized)
 		return
 	}
-	u, perms, err := h.svc.Me(c.Request.Context(), claims.UserID)
+	profile, err := h.svc.Me(c.Request.Context(), claims.UserID)
 	if err != nil {
 		MapError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, MeResponse{User: toUserResponse(u), Permissions: perms})
+	c.JSON(http.StatusOK, toMeResponse(profile))
 }
 
 // UpdateUser handles PATCH /users/:id (MVP-001.5).

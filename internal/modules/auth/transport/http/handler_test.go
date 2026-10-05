@@ -25,8 +25,8 @@ type httpFixture struct {
 
 func newHTTPFixture() *httpFixture {
 	stores := infrastructure.NewMemoryStores()
-	stores.SeedSPPG(1)
-	stores.SeedSekolah(10, 1)
+	stores.SeedSPPGWithName(1, "SPPG Cempaka")
+	stores.SeedSekolahWithName(10, 1, "SDN 01")
 	issuer := infrastructure.NewJWTIssuer("test-secret")
 	svc := application.New(application.Deps{
 		Users: stores, Refresh: stores, Audits: stores, SPPG: stores, Sekolah: stores,
@@ -144,6 +144,16 @@ func TestLoginMeRefreshLogoutFlow(t *testing.T) {
 	if me.Code != http.StatusOK {
 		t.Fatalf("me: %d %s", me.Code, me.Body.String())
 	}
+	var profile MeResponse
+	if err := json.Unmarshal(me.Body.Bytes(), &profile); err != nil {
+		t.Fatal(err)
+	}
+	if profile.Email != "kasir@x.com" || !profile.WajibGantiPassword || len(profile.Permissions) == 0 {
+		t.Fatalf("me payload incomplete: %+v", profile)
+	}
+	if profile.SPPG == nil || profile.SPPG.Nama != "SPPG Cempaka" {
+		t.Fatalf("me sppg missing: %+v", profile.SPPG)
+	}
 
 	badLogin := doRequest(t, f.router, "POST", "/api/v1/auth/login", "", map[string]any{"email": "kasir@x.com", "password": "wrong123"})
 	if badLogin.Code != http.StatusUnauthorized {
@@ -158,12 +168,69 @@ func TestLoginMeRefreshLogoutFlow(t *testing.T) {
 	_ = json.Unmarshal(refresh.Body.Bytes(), &rotated)
 
 	logout := doRequest(t, f.router, "POST", "/api/v1/auth/logout", rotated.AccessToken, map[string]any{"refresh_token": rotated.RefreshToken})
-	if logout.Code != http.StatusOK {
-		t.Fatalf("logout: %d %s", logout.Code, logout.Body.String())
+	if logout.Code != http.StatusNoContent {
+		t.Fatalf("logout: got %d %s", logout.Code, logout.Body.String())
+	}
+	if logout.Body.Len() != 0 {
+		t.Fatalf("logout must have no body, got %q", logout.Body.String())
 	}
 	reuse := doRequest(t, f.router, "POST", "/api/v1/auth/refresh", "", map[string]any{"refresh_token": rotated.RefreshToken})
 	if reuse.Code != http.StatusUnauthorized {
 		t.Fatalf("reuse after logout: got %d", reuse.Code)
+	}
+}
+
+func TestRefreshReuseTriggersTheftDetection(t *testing.T) {
+	f := newHTTPFixture()
+	_ = seedAdminAndLogin(t, f, ptrInt(1), "boss2@x.com", "boss1234", domain.RoleAdmin)
+	adminLogin := doRequest(t, f.router, "POST", "/api/v1/auth/login", "", map[string]any{"email": "boss2@x.com", "password": "boss1234"})
+	var adminSess LoginResponse
+	_ = json.Unmarshal(adminLogin.Body.Bytes(), &adminSess)
+	_ = doRequest(t, f.router, "POST", "/api/v1/users", adminSess.AccessToken, map[string]any{
+		"nama": "Korban", "email": "korban@x.com", "peran": "akuntan", "sppg_id": 1, "password_awal": "korban12",
+	})
+	login := doRequest(t, f.router, "POST", "/api/v1/auth/login", "", map[string]any{"email": "korban@x.com", "password": "korban12"})
+	var first LoginResponse
+	_ = json.Unmarshal(login.Body.Bytes(), &first)
+	rotatedReq := doRequest(t, f.router, "POST", "/api/v1/auth/refresh", "", map[string]any{"refresh_token": first.RefreshToken})
+	var second RefreshResponse
+	_ = json.Unmarshal(rotatedReq.Body.Bytes(), &second)
+	// Attacker replays the old token.
+	replay := doRequest(t, f.router, "POST", "/api/v1/auth/refresh", "", map[string]any{"refresh_token": first.RefreshToken})
+	if replay.Code != http.StatusUnauthorized {
+		t.Fatalf("replay: got %d", replay.Code)
+	}
+	// Theft detection revokes everything: the rotated token dies too.
+	after := doRequest(t, f.router, "POST", "/api/v1/auth/refresh", "", map[string]any{"refresh_token": second.RefreshToken})
+	if after.Code != http.StatusUnauthorized {
+		t.Fatalf("post-theft refresh: got %d", after.Code)
+	}
+}
+
+func TestLogoutAllRevokesEverySession(t *testing.T) {
+	f := newHTTPFixture()
+	_ = seedAdminAndLogin(t, f, ptrInt(1), "boss3@x.com", "boss1234", domain.RoleAdmin)
+	adminLogin := doRequest(t, f.router, "POST", "/api/v1/auth/login", "", map[string]any{"email": "boss3@x.com", "password": "boss1234"})
+	var adminSess LoginResponse
+	_ = json.Unmarshal(adminLogin.Body.Bytes(), &adminSess)
+	_ = doRequest(t, f.router, "POST", "/api/v1/users", adminSess.AccessToken, map[string]any{
+		"nama": "Multi", "email": "multi@x.com", "peran": "akuntan", "sppg_id": 1, "password_awal": "multi123",
+	})
+	l1 := doRequest(t, f.router, "POST", "/api/v1/auth/login", "", map[string]any{"email": "multi@x.com", "password": "multi123"})
+	var s1 LoginResponse
+	_ = json.Unmarshal(l1.Body.Bytes(), &s1)
+	l2 := doRequest(t, f.router, "POST", "/api/v1/auth/login", "", map[string]any{"email": "multi@x.com", "password": "multi123"})
+	var s2 LoginResponse
+	_ = json.Unmarshal(l2.Body.Bytes(), &s2)
+	all := doRequest(t, f.router, "POST", "/api/v1/auth/logout?all=true", s1.AccessToken, nil)
+	if all.Code != http.StatusNoContent {
+		t.Fatalf("logout all: got %d %s", all.Code, all.Body.String())
+	}
+	for i, tok := range []string{s1.RefreshToken, s2.RefreshToken} {
+		w := doRequest(t, f.router, "POST", "/api/v1/auth/refresh", "", map[string]any{"refresh_token": tok})
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("session %d alive after logout-all: %d", i, w.Code)
+		}
 	}
 }
 

@@ -151,3 +151,84 @@ Returns `access_token, refresh_token, expires_in, wajib_ganti_password`, and obj
 [ ] Successful and failed logins are written to audit_log with IP.
 [ ] Unit tests exist.
 [ ] Integration test exists.
+
+## MVP-001.3 Refresh token & logout
+
+### Goal
+
+Users remain logged in without entering a password every 15 minutes and can log out securely.
+
+### Actor
+
+Logged-in users
+
+### Input
+
+POST `/api/v1/auth/refresh` 
+POST `/api/v1/auth/logout`
+
+- refresh_token
+
+### Rules
+
+- the refresh token must exist, not have been revoked, and not have expired
+- each refresh revokes the old token and issues a new token pair (rotation)
+- if a revoked token is used again, all of that user’s refresh tokens are revoked (token theft detection)
+- disabled users cannot refresh
+- logout revokes the refresh token sent; `?all=true` revokes all of the user’s sessions
+
+### Success
+
+Refresh: HTTP 200, returns `access_token`, `refresh_token`, `expires_in`
+Logout: HTTP 204, tanpa body
+
+### Failure
+
+400: invalid input
+401: refresh token tidak valid, dicabut, atau kedaluwarsa
+403: akun nonaktif
+500: unexpected internal error
+
+### Acceptance Criteria
+
+[ ] Valid refresh returns a new token pair and revokes the old one.
+[ ] Reused revoked token revokes every session of that user.
+[ ] Logout makes the token unusable.
+[ ] Unit tests exist.
+[ ] Integration test exists.
+
+## MVP-001.4 Current user profile
+
+### Goal
+
+The frontend knows who is logged in, their role, and which menu items should be displayed.
+
+### Actor
+
+Logged-in users
+
+### Input 
+
+GET `/api/v1/auth/me` (header Authorization: Bearer <access_token>)
+
+### Rules
+
+- data is retrieved directly from the database—not just from the token’s contents—so that changes to roles or statuses take effect immediately
+- the list of `permissions` is derived from the role matrix
+
+### Success
+
+HTTP 200
+Returns `id, nama, email, no_hp, peran, sppg (id, nama), sekolah (id, nama), wajib_ganti_password, permissions[]`
+
+### Failure
+
+401: token tidak ada, tidak valid, atau kedaluwarsa
+403: akun sudah dinonaktifkan
+500: unexpected internal error
+
+Acceptance Criteria
+[ ] Returns the profile of the token owner only.
+[ ] Deactivated user receives 403 even with a valid token.
+[ ] Unit tests exist.
+[ ] Integration test exists.

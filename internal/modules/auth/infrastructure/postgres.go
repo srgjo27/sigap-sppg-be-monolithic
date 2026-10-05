@@ -292,6 +292,18 @@ func (p *Postgres) Exists(ctx context.Context, id int64) (bool, error) {
 	return exists, nil
 }
 
+// GetSPPG resolves an SPPG display name.
+func (p *Postgres) GetSPPG(ctx context.Context, id int64) (*domain.SPPGInfo, error) {
+	var nama string
+	if err := p.Pool.QueryRow(ctx, `SELECT nama FROM sppg WHERE id=$1`, id).Scan(&nama); err != nil {
+		if isNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get sppg: %w", err)
+	}
+	return &domain.SPPGInfo{ID: id, Nama: nama}, nil
+}
+
 // FindOwner returns sekolah ownership.
 func (p *Postgres) FindOwner(ctx context.Context, sekolahID int64) (bool, int64, error) {
 	var sppgID int64
@@ -302,6 +314,18 @@ func (p *Postgres) FindOwner(ctx context.Context, sekolahID int64) (bool, int64,
 		return false, 0, fmt.Errorf("find sekolah: %w", err)
 	}
 	return true, sppgID, nil
+}
+
+// GetSekolah resolves a sekolah display name.
+func (p *Postgres) GetSekolah(ctx context.Context, id int64) (*domain.SekolahInfo, error) {
+	var nama string
+	if err := p.Pool.QueryRow(ctx, `SELECT nama FROM sekolah WHERE id=$1`, id).Scan(&nama); err != nil {
+		if isNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("get sekolah: %w", err)
+	}
+	return &domain.SekolahInfo{ID: id, Nama: nama}, nil
 }
 
 func nullableInt(p *int64) any {

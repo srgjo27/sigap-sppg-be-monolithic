@@ -30,15 +30,19 @@ type AuditRepository interface {
 	List(ctx context.Context, filter domain.AuditFilter, scopeSPPGID *int64) ([]domain.AuditEntry, int, error)
 }
 
-// SPPGChecker verifies sppg existence.
+// SPPGChecker verifies sppg existence and resolves display names.
 type SPPGChecker interface {
 	Exists(ctx context.Context, id int64) (bool, error)
+	// GetSPPG returns (nil, nil) when the SPPG does not exist.
+	GetSPPG(ctx context.Context, id int64) (*domain.SPPGInfo, error)
 }
 
 // SekolahChecker verifies sekolah existence and ownership.
 type SekolahChecker interface {
 	// FindOwner returns (found, sppgID, error).
 	FindOwner(ctx context.Context, sekolahID int64) (bool, int64, error)
+	// GetSekolah returns (nil, nil) when the sekolah does not exist.
+	GetSekolah(ctx context.Context, id int64) (*domain.SekolahInfo, error)
 }
 
 // TokenIssuer issues and parses access tokens.

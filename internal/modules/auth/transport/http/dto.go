@@ -3,6 +3,7 @@ package http
 import (
 	"time"
 
+	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/application"
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/domain"
 )
 
@@ -77,10 +78,23 @@ type LogoutRequest struct {
 	RefreshToken string `json:"refresh_token" binding:"required"`
 }
 
-// MeResponse is GET /api/v1/auth/me.
+// NamedRef is an id+nama reference for profile responses.
+type NamedRef struct {
+	ID   int64  `json:"id"`
+	Nama string `json:"nama"`
+}
+
+// MeResponse is GET /api/v1/auth/me (MVP-001.4).
 type MeResponse struct {
-	User        UserResponse `json:"user"`
-	Permissions []string     `json:"permissions"`
+	ID                 int64     `json:"id"`
+	Nama               string    `json:"nama"`
+	Email              string    `json:"email"`
+	NoHP               *string   `json:"no_hp,omitempty"`
+	Peran              string    `json:"peran"`
+	SPPG               *NamedRef `json:"sppg,omitempty"`
+	Sekolah            *NamedRef `json:"sekolah,omitempty"`
+	WajibGantiPassword bool      `json:"wajib_ganti_password"`
+	Permissions        []string  `json:"permissions"`
 }
 
 // UpdateUserRequest is PATCH /api/v1/users/:id. Pointers detect omission;
@@ -146,6 +160,26 @@ func toLoginBrief(u *domain.User) LoginUserBrief {
 		SPPGID:    u.SPPGID,
 		SekolahID: u.SekolahID,
 	}
+}
+
+func toMeResponse(p *application.Profile) MeResponse {
+	u := p.User
+	res := MeResponse{
+		ID:                 u.ID,
+		Nama:               u.Nama,
+		Email:              u.Email,
+		NoHP:               u.NoHP,
+		Peran:              string(u.Peran),
+		WajibGantiPassword: u.WajibGantiPassword,
+		Permissions:        p.Permissions,
+	}
+	if p.SPPG != nil {
+		res.SPPG = &NamedRef{ID: p.SPPG.ID, Nama: p.SPPG.Nama}
+	}
+	if p.Sekolah != nil {
+		res.Sekolah = &NamedRef{ID: p.Sekolah.ID, Nama: p.Sekolah.Nama}
+	}
+	return res
 }
 
 func toAuditItem(e domain.AuditEntry) AuditLogItem {

@@ -269,7 +269,8 @@ type RefreshResult struct {
 	ExpiresIn    int64
 }
 
-// Refresh rotates a refresh token.
+// Refresh rotates a refresh token (MVP-001.3).
+// Reuse of a revoked token triggers theft detection: all sessions revoked.
 func (s *Service) Refresh(ctx context.Context, plainRefresh string, ip *string, userAgent *string) (*RefreshResult, error) {
 	now := s.clock()
 	if plainRefresh == "" {
@@ -284,6 +285,16 @@ func (s *Service) Refresh(ctx context.Context, plainRefresh string, ip *string, 
 		return nil, domain.ErrRefreshInvalid
 	}
 	if stored.RevokedAt != nil {
+		_ = s.refresh.RevokeAllForUser(ctx, stored.UserID, now)
+		_ = s.audits.Append(ctx, &domain.AuditEntry{
+			UserID:    &stored.UserID,
+			Aksi:      domain.AuditRefresh,
+			Tabel:     domain.AuditTableAuth,
+			RecordID:  &stored.UserID,
+			DataBaru:  strPtr(mustJSON(map[string]any{"reused_revoked": true})),
+			IPAddress: ip,
+			CreatedAt: now,
+		})
 		return nil, domain.ErrRefreshRevoked
 	}
 	if now.After(stored.ExpiresAt) {
@@ -366,19 +377,61 @@ func (s *Service) Logout(ctx context.Context, plainRefresh string, ip *string) e
 	return nil
 }
 
+// LogoutAll revokes every session of a user (MVP-001.3 ?all=true).
+func (s *Service) LogoutAll(ctx context.Context, userID int64, ip *string) error {
+	now := s.clock()
+	if err := s.refresh.RevokeAllForUser(ctx, userID, now); err != nil {
+		return fmt.Errorf("revoke all refresh: %w", err)
+	}
+	_ = s.audits.Append(ctx, &domain.AuditEntry{
+		UserID:    &userID,
+		Aksi:      domain.AuditLogout,
+		Tabel:     domain.AuditTableAuth,
+		RecordID:  &userID,
+		DataBaru:  strPtr(mustJSON(map[string]any{"all": true})),
+		IPAddress: ip,
+		CreatedAt: now,
+	})
+	return nil
+}
+
+// Profile is the enriched MVP-001.4 current-user payload.
+type Profile struct {
+	User        *domain.User
+	SPPG        *domain.SPPGInfo
+	Sekolah     *domain.SekolahInfo
+	Permissions []string
+}
+
 // Me returns the active profile plus permissions (MVP-001.4).
-func (s *Service) Me(ctx context.Context, userID int64) (*domain.User, []string, error) {
+// Data comes from the database so role/status changes apply immediately.
+func (s *Service) Me(ctx context.Context, userID int64) (*Profile, error) {
 	u, err := s.users.FindByID(ctx, userID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("find user: %w", err)
+		return nil, fmt.Errorf("find user: %w", err)
 	}
 	if u == nil {
-		return nil, nil, domain.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if !u.Aktif {
-		return nil, nil, domain.ErrAccountInactive
+		return nil, domain.ErrAccountInactive
 	}
-	return u, u.Peran.Permissions(), nil
+	p := &Profile{User: u, Permissions: u.Peran.Permissions()}
+	if u.SPPGID != nil {
+		if info, err := s.sppg.GetSPPG(ctx, *u.SPPGID); err == nil {
+			p.SPPG = info
+		} else {
+			return nil, fmt.Errorf("get sppg: %w", err)
+		}
+	}
+	if u.SekolahID != nil {
+		if info, err := s.sekolah.GetSekolah(ctx, *u.SekolahID); err == nil {
+			p.Sekolah = info
+		} else {
+			return nil, fmt.Errorf("get sekolah: %w", err)
+		}
+	}
+	return p, nil
 }
 
 // UpdateUser implements MVP-001.5.
