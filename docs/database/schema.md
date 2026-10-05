@@ -8,7 +8,18 @@ PostgreSQL database for SIGAP SPPG backend.
 
 - users
 - sppg
-
+- sekolah
+- pemasok
+- menu
+- purchase_order
+- penerimaan_bahan
+- batch_produksi
+- checklist_sop
+- pengiriman
+- konfirmasi_terima
+- pengaduan
+- transaksi_dana
+- audit_log
   
 ## Important Relationships
 

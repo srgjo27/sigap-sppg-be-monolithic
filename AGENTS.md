@@ -82,6 +82,17 @@ Before creating database models or queries:
 3. Do not modify the database directly.
 4. Database changes must be represented as migrations.
 
+## Environment
+
+Never hardcode database credentials.
+
+Never commit:
+- .env
+- passwords
+- API keys
+- tokens
+- private credentials
+
 ## Go rules
 
 - Follow idiomatic Go.
