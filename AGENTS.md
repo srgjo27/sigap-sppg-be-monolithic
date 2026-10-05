@@ -66,6 +66,22 @@ Rules:
 - Define interfaces close to the consumer.
 - Prefer composition and explicit dependencies.
 
+## Database
+
+The project uses PostgreSQL.
+
+Database schema is documented in:
+- db/schema.sql
+- docs/database/schema.md
+
+The database must be treated as an existing source of truth.
+
+Before creating database models or queries:
+1. Inspect the actual schema.
+2. Do not invent columns or relationships.
+3. Do not modify the database directly.
+4. Database changes must be represented as migrations.
+
 ## Go rules
 
 - Follow idiomatic Go.
