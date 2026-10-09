@@ -1,0 +1,174 @@
+# MVP-002 Menu & gizi
+ 
+Spesifikasi modul M2 (P0): master bahan, penyusunan menu harian beserta komposisi dan nilai gizi per porsi, persetujuan menu, dan perhitungan kebutuhan bahan otomatis. Dipecah menjadi 7 endpoint yang masing-masing bisa diuji terpisah. Semua endpoint berprefiks `/api/v1`, dilindungi middleware RBAC dari MVP-001.8, dan memakai tabel `bahan`, `menu`, `menu_bahan`, `sekolah`, `audit_log`.
+ 
+## Main Feature
+ 
+Menu harian/mingguan, komposisi gizi per porsi, kebutuhan bahan otomatis dari jumlah penerima
+ 
+## Ringkasan endpoint
+ 
+| ID | Endpoint | Fungsi | Akses |
+| --- | --- | --- | --- |
+| MVP-002.1 | GET/POST/PATCH /bahan | Kelola master bahan | baca: semua peran SPPG; tulis: admin, ahli\_gizi |
+| MVP-002.2 | POST /menus | Buat menu harian (draf) beserta komposisi | ahli\_gizi |
+| MVP-002.3 | GET /menus, GET /menus/{id} | Daftar menu per rentang tanggal dan detailnya | semua peran SPPG, pengawas |
+| MVP-002.4 | PATCH /menus/{id}, DELETE /menus/{id} | Ubah atau hapus menu draf | ahli\_gizi |
+| MVP-002.5 | POST /menus/{id}/approve, POST /menus/{id}/revert | Setujui menu atau kembalikan ke draf | kepala\_sppg |
+| MVP-002.6 | GET /menus/{id}/kebutuhan-bahan | Hitung total kebutuhan bahan | ahli\_gizi, akuntan, kepala\_sppg |
+| MVP-002.7 | POST /menus/{id}/copy | Salin menu ke tanggal lain (susun menu mingguan) | ahli\_gizi |
+ 
+## Matriks peran
+ 
+| Peran | Master bahan | Buat/ubah menu | Setujui menu | Lihat menu & kebutuhan bahan |
+| --- | --- | --- | --- | --- |
+| admin | Tulis | Tidak | Tidak | Semua SPPG |
+| ahli\_gizi | Tulis | Ya, SPPG sendiri | Tidak | SPPG sendiri |
+| kepala\_sppg | Baca | Tidak | Ya, SPPG sendiri | SPPG sendiri |
+| akuntan | Baca | Tidak | Tidak | SPPG sendiri (untuk menyusun PO) |
+| petugas\_dapur, petugas\_distribusi | Baca | Tidak | Tidak | Menu saja, SPPG sendiri |
+| pic\_sekolah | Tidak | Tidak | Tidak | Menu yang sudah disetujui untuk SPPG yang melayani sekolahnya |
+| pengawas | Baca | Tidak | Tidak | Semua SPPG, baca saja |
+
+## Tambahan skema
+ 
+Perhitungan kebutuhan bahan butuh konversi gram ke satuan bahan (mis. telur dalam butir), dan persetujuan menu perlu dicatat pelakunya.
+Read `/db/schema.sql` before work.
+
+## Aturan umum
+ 
+- Satu menu per SPPG per tanggal (UNIQUE `sppg_id, tanggal`).
+- Menu berstatus `disetujui` tidak bisa diubah atau dihapus; harus dikembalikan ke draf dulu (MVP-002.5).
+- Menu yang sudah dipakai di `batch_produksi` tidak bisa dikembalikan ke draf, diubah, atau dihapus.
+- `target_porsi` default = jumlah `sekolah.jumlah_penerima` milik SPPG tersebut; ahli gizi boleh mengubahnya.
+- Nilai gizi (`energi_kkal`, `protein_g`, `karbohidrat_g`, `lemak_g`) diisi manual oleh ahli gizi per porsi pada MVP; perhitungan otomatis dari tabel komposisi pangan masuk rilis berikutnya.
+- Semua perubahan menu dan bahan dicatat di `audit_log`; format error mengikuti MVP-001.
+- Angka desimal dikirim sebagai string atau number dengan maksimal 2 angka di belakang koma.
+
+ 
+## MVP-002.1 Master bahan
+ 
+### Goal
+ 
+Ahli gizi dan admin mengelola daftar bahan pangan yang dipakai di menu dan pengadaan, lengkap dengan satuan dan sifat mudah rusak.
+ 
+### Actor
+ 
+baca: semua peran kecuali pic\_sekolah; tulis: admin, ahli\_gizi
+ 
+### Input
+ 
+`POST /api/v1/bahan` dan `PATCH /api/v1/bahan/{id}`
+ 
+- nama
+- kategori (karbohidrat, protein\_hewani, protein\_nabati, sayur, buah, bumbu, lainnya)
+- satuan (kg, liter, butir, ikat, pcs)
+- gram\_per\_satuan
+- mudah\_rusak (boolean)
+- suhu\_simpan\_maks (opsional, °C)
+- aktif (hanya PATCH)
+`GET /api/v1/bahan?q=&kategori=&aktif=` untuk pencarian.
+ 
+### Rules
+ 
+- nama must be unique (case-insensitive) dan wajib, 2–100 karakter
+- kategori dan satuan wajib, dari daftar yang diizinkan
+- gram\_per\_satuan > 0; untuk satuan kg dan liter otomatis 1000 bila tidak diisi
+- suhu\_simpan\_maks wajib bila mudah\_rusak = true
+- bahan tidak bisa dihapus, hanya dinonaktifkan; bahan nonaktif tidak muncul saat menyusun menu baru, tetapi menu lama tetap utuh
+### Success
+ 
+POST: HTTP 201, returns created bahan
+ 
+PATCH: HTTP 200, returns updated bahan
+ 
+GET: HTTP 200, returns `data[]` dan `meta`
+ 
+### Failure
+ 
+400: invalid input
+ 
+401: tidak login
+ 
+403: peran tidak berhak menulis
+ 
+404: bahan not found
+ 
+409: nama bahan already exists
+ 
+500: unexpected internal error
+ 
+### Acceptance Criteria
+ 
+- [ ] Request is validated.
+- [ ] Duplicate name (any letter case) is rejected with 409.
+- [ ] Perishable item without max storage temperature is rejected.
+- [ ] Deactivated item is hidden from new menu input but kept in old menus.
+- [ ] Data is persisted to PostgreSQL and written to audit\_log.
+- [ ] Unit tests exist.
+- [ ] Integration test exists.
+
+## MVP-002.2 Create menu
+ 
+### Goal
+ 
+Ahli gizi menyusun menu untuk satu tanggal, lengkap dengan komposisi bahan per porsi dan nilai gizinya.
+ 
+### Actor
+ 
+ahli\_gizi
+ 
+### Input
+ 
+`POST /api/v1/menus`
+ 
+- tanggal
+- nama\_menu
+- energi\_kkal, protein\_g, karbohidrat\_g, lemak\_g (per porsi)
+- target\_porsi (opsional; default dari jumlah penerima)
+- catatan (opsional)
+- bahan\[\]: { bahan\_id, gram\_per\_porsi }
+### Rules
+ 
+- (sppg\_id, tanggal) must be unique; sppg\_id diambil dari token, bukan dari body
+- tanggal tidak boleh di masa lalu
+- nama\_menu is required, 3–200 karakter
+- nilai gizi wajib dan > 0; energi\_kkal maks 2000, protein/karbohidrat/lemak maks 300 g (cegah salah ketik)
+- bahan\[\] minimal 1 item, setiap bahan\_id harus ada dan aktif, tidak boleh duplikat
+- gram\_per\_porsi > 0 dan maks 1000
+- target\_porsi > 0; bila melebihi `sppg.kapasitas_porsi` tetap diterima tetapi response menyertakan `warnings[]`
+- menu baru selalu berstatus `draf`; `dibuat_oleh` = user dari token
+- menu dan semua `menu_bahan` disimpan dalam satu transaksi
+### Success
+ 
+HTTP 201
+ 
+Returns created menu: `id, tanggal, nama_menu, gizi {energi_kkal, protein_g, karbohidrat_g, lemak_g}, target_porsi, status, bahan[] {bahan_id, nama, gram_per_porsi}, dibuat_oleh, created_at, warnings[]`
+ 
+### Failure
+ 
+400: invalid input
+ 
+401: tidak login
+ 
+403: bukan ahli\_gizi
+ 
+404: bahan\_id tidak ditemukan
+ 
+409: menu untuk tanggal tersebut already exists
+ 
+422: bahan nonaktif atau duplikat dalam komposisi
+ 
+500: unexpected internal error
+ 
+### Acceptance Criteria
+ 
+- [ ] Request is validated.
+- [ ] Second menu on the same date for the same SPPG is rejected with 409.
+- [ ] Menu and its ingredients are saved atomically (no partial data on failure).
+- [ ] target\_porsi defaults to total recipients of the SPPG's schools.
+- [ ] Created menu has status draf.
+- [ ] Data is persisted to PostgreSQL and written to audit\_log.
+- [ ] Created entity is returned.
+- [ ] Unit tests exist.
+- [ ] Integration test exists.
