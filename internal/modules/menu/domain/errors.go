@@ -12,6 +12,8 @@ var (
 	ErrDuplicateBahan = errors.New("duplicate bahan in composition")
 	ErrMenuApproved   = errors.New("menu already approved")
 	ErrMenuInUse      = errors.New("menu already used in production")
+	ErrMenuIncomplete = errors.New("menu is incomplete")
+	ErrStatusConflict = errors.New("menu status conflict")
 	ErrForbidden      = errors.New("forbidden")
 	ErrUnauthorized   = errors.New("unauthorized")
 	ErrNotFound       = errors.New("not found")

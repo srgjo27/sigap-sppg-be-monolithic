@@ -467,6 +467,31 @@ func (p *Postgres) IsMenuUsed(ctx context.Context, menuID int64) (bool, error) {
 	return exists, nil
 }
 
+// SetApproval flips status plus approver columns atomically (MVP-002.5).
+func (p *Postgres) SetApproval(ctx context.Context, id int64, status string, approver *int64, approvedAt *time.Time) (*domain.Menu, error) {
+	const q = `UPDATE menu SET status=$2, disetujui_oleh=$3, disetujui_at=$4, updated_at=now()
+		WHERE id=$1 RETURNING id, sppg_id, tanggal, nama_menu, energi_kkal, protein_g, karbohidrat_g, lemak_g, target_porsi, catatan, dibuat_oleh, status, disetujui_oleh, disetujui_at, created_at, updated_at`
+	row := p.Pool.QueryRow(ctx, q, id, status, nullableInt(approver), nullableTime(approvedAt))
+	m, err := scanMenu(row)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, domain.ErrMenuNotFound
+		}
+		return nil, fmt.Errorf("set approval: %w", err)
+	}
+	return m, nil
+}
+
+// NotifySPPGRoles implements NotificationRepository (MVP-002.5).
+func (p *Postgres) NotifySPPGRoles(ctx context.Context, sppgID int64, roles []string, jenis, judul, isi, refTabel string, refID int64) error {
+	const q = `INSERT INTO notifikasi (user_id, jenis, judul, isi, ref_tabel, ref_id)
+		SELECT id, $3, $4, $5, $6, $7 FROM users WHERE sppg_id=$1 AND peran = ANY($2) AND aktif`
+	if _, err := p.Pool.Exec(ctx, q, sppgID, roles, jenis, judul, isi, refTabel, refID); err != nil {
+		return fmt.Errorf("notify sppg roles: %w", err)
+	}
+	return nil
+}
+
 // Append writes an audit entry.
 func (p *Postgres) Append(ctx context.Context, e *authdomain.AuditEntry) error {
 	const q = `INSERT INTO audit_log (user_id, aksi, tabel, record_id, data_lama, data_baru, ip_address)
@@ -495,6 +520,13 @@ func nullableStr(p *string) any {
 }
 
 func nullableFloat(p *float64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func nullableTime(p *time.Time) any {
 	if p == nil {
 		return nil
 	}

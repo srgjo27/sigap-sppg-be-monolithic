@@ -26,8 +26,29 @@ type MemoryStores struct {
 	recipients      map[int64]int
 	sekolahOwner    map[int64]int64
 	batchMenus      map[int64]bool
+	users           map[int64]memUser
+	nextUserID      int64
+	notifs          []Notification
 	audits          []authdomain.AuditEntry
 	nextAuditID     int64
+}
+
+// memUser is the minimal directory for approval notifications.
+type memUser struct {
+	ID     int64
+	SPPGID *int64
+	Role   string
+	Aktif  bool
+}
+
+// Notification mirrors a notifikasi row for tests.
+type Notification struct {
+	UserID   int64
+	Jenis    string
+	Judul    string
+	Isi      string
+	RefTabel string
+	RefID    int64
 }
 
 // NewMemoryStores builds empty stores.
@@ -45,7 +66,8 @@ func NewMemoryStores() *MemoryStores {
 		recipients:      map[int64]int{},
 		sekolahOwner:    map[int64]int64{},
 		batchMenus:      map[int64]bool{},
-		nextAuditID:     1,
+		users:           map[int64]memUser{},
+		nextUserID:      1,
 	}
 }
 
@@ -71,6 +93,43 @@ func (m *MemoryStores) MarkMenuUsed(menuID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.batchMenus[menuID] = true
+}
+
+// SeedUser registers an active user for notification fan-out (tests).
+func (m *MemoryStores) SeedUser(sppgID *int64, role string) int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id := m.nextUserID
+	m.nextUserID++
+	m.users[id] = memUser{ID: id, SPPGID: sppgID, Role: role, Aktif: true}
+	if sppgID != nil {
+		m.sppgExists[*sppgID] = true
+	}
+	return id
+}
+
+// NotifySPPGRoles implements NotificationRepository.
+func (m *MemoryStores) NotifySPPGRoles(ctx context.Context, sppgID int64, roles []string, jenis, judul, isi, refTabel string, refID int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	want := map[string]bool{}
+	for _, r := range roles {
+		want[r] = true
+	}
+	for _, u := range m.users {
+		if !u.Aktif || u.SPPGID == nil || *u.SPPGID != sppgID || !want[u.Role] {
+			continue
+		}
+		m.notifs = append(m.notifs, Notification{UserID: u.ID, Jenis: jenis, Judul: judul, Isi: isi, RefTabel: refTabel, RefID: refID})
+	}
+	return nil
+}
+
+// Notifications returns a copy of queued notifications (tests).
+func (m *MemoryStores) Notifications() []Notification {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]Notification{}, m.notifs...)
 }
 
 // SeedBahan inserts a bahan directly (tests).
@@ -386,6 +445,22 @@ func (m *MemoryStores) IsMenuUsed(ctx context.Context, menuID int64) (bool, erro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.batchMenus[menuID], nil
+}
+
+// SetApproval implements MenuRepository.
+func (m *MemoryStores) SetApproval(ctx context.Context, id int64, status string, approver *int64, approvedAt *time.Time) (*domain.Menu, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	menu, ok := m.menus[id]
+	if !ok {
+		return nil, domain.ErrMenuNotFound
+	}
+	menu.Status = status
+	menu.DisetujuiOleh = approver
+	menu.DisetujuiAt = approvedAt
+	menu.UpdatedAt = time.Now()
+	cp := *menu
+	return &cp, nil
 }
 
 // Append implements AuditRepository.

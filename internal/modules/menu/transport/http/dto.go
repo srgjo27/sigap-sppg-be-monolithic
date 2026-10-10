@@ -226,3 +226,82 @@ func toUpdateMenuResponse(res *application.UpdateMenuResult) UpdateMenuResponse 
 		DibuatOleh: res.Menu.DibuatOleh, CreatedAt: res.Menu.CreatedAt, Warnings: warnings,
 	}
 }
+
+// RevertRequest is POST /menus/{id}/revert input (alasan required).
+type RevertRequest struct {
+	Alasan string `json:"alasan"`
+}
+
+// ApprovalResponse is the MVP-002.5 success payload (menu with new status).
+type ApprovalResponse struct {
+	ID            int64               `json:"id"`
+	Tanggal       string              `json:"tanggal"`
+	NamaMenu      string              `json:"nama_menu"`
+	Gizi          MenuGiziResponse    `json:"gizi"`
+	TargetPorsi   int                 `json:"target_porsi"`
+	Status        string              `json:"status"`
+	Bahan         []MenuBahanResponse `json:"bahan"`
+	DibuatOleh    int64               `json:"dibuat_oleh"`
+	DisetujuiOleh *int64              `json:"disetujui_oleh,omitempty"`
+	DisetujuiAt   *time.Time          `json:"disetujui_at,omitempty"`
+	CreatedAt     time.Time           `json:"created_at"`
+}
+
+// KebutuhanMenuRef summarizes the menu in kebutuhan responses.
+type KebutuhanMenuRef struct {
+	ID       int64  `json:"id"`
+	Tanggal  string `json:"tanggal"`
+	NamaMenu string `json:"nama_menu"`
+	Status   string `json:"status"`
+}
+
+// KebutuhanItemResponse is one computed row.
+type KebutuhanItemResponse struct {
+	BahanID      int64   `json:"bahan_id"`
+	Nama         string  `json:"nama"`
+	Kategori     string  `json:"kategori"`
+	Satuan       string  `json:"satuan"`
+	GramPerPorsi float64 `json:"gram_per_porsi"`
+	TotalGram    float64 `json:"total_gram"`
+	Qty          float64 `json:"qty"`
+	MudahRusak   bool    `json:"mudah_rusak"`
+}
+
+// KebutuhanResponse is the MVP-002.6 success payload.
+type KebutuhanResponse struct {
+	Menu           KebutuhanMenuRef        `json:"menu"`
+	TargetPorsi    int                     `json:"target_porsi"`
+	CadanganPersen float64                 `json:"cadangan_persen"`
+	Items          []KebutuhanItemResponse `json:"items"`
+}
+
+func toApprovalResponse(res *application.ApprovalResult) ApprovalResponse {
+	items := make([]MenuBahanResponse, 0, len(res.Items))
+	for _, it := range res.Items {
+		items = append(items, MenuBahanResponse{BahanID: it.BahanID, Nama: it.BahanNama, GramPerPorsi: it.GramPerPorsi})
+	}
+	return ApprovalResponse{
+		ID: res.Menu.ID, Tanggal: res.Menu.Tanggal.Format("2006-01-02"), NamaMenu: res.Menu.NamaMenu,
+		Gizi:        MenuGiziResponse{EnergiKkal: res.Menu.EnergiKkal, ProteinG: res.Menu.ProteinG, KarbohidratG: res.Menu.KarbohidratG, LemakG: res.Menu.LemakG},
+		TargetPorsi: res.Menu.TargetPorsi, Status: res.Menu.Status, Bahan: items,
+		DibuatOleh: res.Menu.DibuatOleh, DisetujuiOleh: res.Menu.DisetujuiOleh, DisetujuiAt: res.Menu.DisetujuiAt,
+		CreatedAt: res.Menu.CreatedAt,
+	}
+}
+
+func toKebutuhanResponse(res *application.KebutuhanResult) KebutuhanResponse {
+	items := make([]KebutuhanItemResponse, 0, len(res.Items))
+	for _, it := range res.Items {
+		items = append(items, KebutuhanItemResponse{
+			BahanID: it.BahanID, Nama: it.Nama, Kategori: it.Kategori, Satuan: it.Satuan,
+			GramPerPorsi: it.GramPerPorsi, TotalGram: it.TotalGram, Qty: it.Qty, MudahRusak: it.MudahRusak,
+		})
+	}
+	return KebutuhanResponse{
+		Menu: KebutuhanMenuRef{
+			ID: res.Menu.ID, Tanggal: res.Menu.Tanggal.Format("2006-01-02"),
+			NamaMenu: res.Menu.NamaMenu, Status: res.Menu.Status,
+		},
+		TargetPorsi: res.TargetPorsi, CadanganPersen: res.CadanganPersen, Items: items,
+	}
+}

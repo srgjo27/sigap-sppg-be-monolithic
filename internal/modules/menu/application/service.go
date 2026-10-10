@@ -14,13 +14,14 @@ import (
 // Clock abstracts time for tests.
 type Clock func() time.Time
 
-// Service orchestrates MVP-002.1 through MVP-002.4 use cases.
+// Service orchestrates MVP-002.1 through MVP-002.6 use cases.
 type Service struct {
 	bahan   BahanRepository
 	menus   MenuRepository
 	sppg    SPPGProvider
 	sekolah SekolahProvider
 	audits  AuditRepository
+	notifs  NotificationRepository
 	clock   Clock
 }
 
@@ -31,6 +32,7 @@ type Deps struct {
 	SPPG    SPPGProvider
 	Sekolah SekolahProvider
 	Audits  AuditRepository
+	Notifs  NotificationRepository
 	Clock   Clock
 }
 
@@ -40,7 +42,7 @@ func New(d Deps) *Service {
 	if clock == nil {
 		clock = time.Now
 	}
-	return &Service{bahan: d.Bahan, menus: d.Menus, sppg: d.SPPG, sekolah: d.Sekolah, audits: d.Audits, clock: clock}
+	return &Service{bahan: d.Bahan, menus: d.Menus, sppg: d.SPPG, sekolah: d.Sekolah, audits: d.Audits, notifs: d.Notifs, clock: clock}
 }
 
 // --- MVP-002.1 ---
@@ -623,6 +625,203 @@ func menuSnapshot(m *domain.Menu) map[string]any {
 		"karbohidrat_g": m.KarbohidratG, "lemak_g": m.LemakG,
 		"target_porsi": m.TargetPorsi, "status": m.Status,
 	}
+}
+
+// --- MVP-002.5 ---
+
+// ApprovalResult carries a menu with its composition after status change.
+type ApprovalResult struct {
+	Menu  *domain.Menu
+	Items []domain.MenuBahan
+}
+
+// approvalDetail loads items for an approval response (best-effort: empty on error).
+func (s *Service) approvalDetail(ctx context.Context, m *domain.Menu) []domain.MenuBahan {
+	got, err := s.menus.ListItems(ctx, []int64{m.ID})
+	if err != nil {
+		return []domain.MenuBahan{}
+	}
+	items := got[m.ID]
+	if items == nil {
+		items = []domain.MenuBahan{}
+	}
+	return items
+}
+
+// ApproveMenu implements POST /menus/{id}/approve. Actor: kepala_sppg, own SPPG.
+func (s *Service) ApproveMenu(ctx context.Context, actor *authdomain.Claims, id int64, ip *string) (*ApprovalResult, error) {
+	if actor == nil {
+		return nil, domain.ErrUnauthorized
+	}
+	if actor.Role != authdomain.RoleKepalaSPPG {
+		return nil, domain.ErrForbidden
+	}
+	if actor.SPPGID == nil {
+		return nil, domain.ErrForbidden
+	}
+	current, err := s.menus.FindMenuByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("find menu: %w", err)
+	}
+	if current == nil || current.SPPGID != *actor.SPPGID {
+		return nil, domain.ErrMenuNotFound
+	}
+	if current.Status != domain.MenuStatusDraf {
+		return nil, domain.ErrStatusConflict
+	}
+	items := s.approvalDetail(ctx, current)
+	if !domain.MenuComplete(current, items) {
+		return nil, domain.ErrMenuIncomplete
+	}
+	now := s.clock()
+	approver := actor.UserID
+	updated, err := s.menus.SetApproval(ctx, id, domain.MenuStatusDisetujui, &approver, &now)
+	if err != nil {
+		return nil, fmt.Errorf("approve menu: %w", err)
+	}
+	_ = s.audits.Append(ctx, &authdomain.AuditEntry{
+		UserID:    &actor.UserID,
+		Aksi:      authdomain.AuditUpdate,
+		Tabel:     "menu",
+		RecordID:  &updated.ID,
+		DataLama:  strPtr(mustJSON(map[string]any{"status": domain.MenuStatusDraf})),
+		DataBaru:  strPtr(mustJSON(map[string]any{"status": domain.MenuStatusDisetujui, "disetujui_oleh": approver})),
+		IPAddress: ip,
+		CreatedAt: now,
+	})
+	if s.notifs != nil {
+		_ = s.notifs.NotifySPPGRoles(ctx, *actor.SPPGID,
+			[]string{string(authdomain.RoleAkuntan), string(authdomain.RoleAhliGizi)},
+			"menu_disetujui", "Menu disetujui",
+			fmt.Sprintf("Menu %s tanggal %s siap dipesan", updated.NamaMenu, updated.Tanggal.Format("2006-01-02")),
+			"menu", updated.ID)
+	}
+	return &ApprovalResult{Menu: updated, Items: s.approvalDetail(ctx, updated)}, nil
+}
+
+// RevertMenu implements POST /menus/{id}/revert. Actor: kepala_sppg, own SPPG.
+func (s *Service) RevertMenu(ctx context.Context, actor *authdomain.Claims, id int64, alasan string, ip *string) (*ApprovalResult, error) {
+	if actor == nil {
+		return nil, domain.ErrUnauthorized
+	}
+	if actor.Role != authdomain.RoleKepalaSPPG {
+		return nil, domain.ErrForbidden
+	}
+	if actor.SPPGID == nil {
+		return nil, domain.ErrForbidden
+	}
+	if err := domain.ValidateRevertReason(alasan); err != nil {
+		return nil, err
+	}
+	current, err := s.menus.FindMenuByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("find menu: %w", err)
+	}
+	if current == nil || current.SPPGID != *actor.SPPGID {
+		return nil, domain.ErrMenuNotFound
+	}
+	if current.Status != domain.MenuStatusDisetujui {
+		return nil, domain.ErrStatusConflict
+	}
+	used, err := s.menus.IsMenuUsed(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("check menu usage: %w", err)
+	}
+	if used {
+		return nil, domain.ErrMenuInUse
+	}
+	now := s.clock()
+	updated, err := s.menus.SetApproval(ctx, id, domain.MenuStatusDraf, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("revert menu: %w", err)
+	}
+	trimmed := strings.TrimSpace(alasan)
+	_ = s.audits.Append(ctx, &authdomain.AuditEntry{
+		UserID:    &actor.UserID,
+		Aksi:      authdomain.AuditUpdate,
+		Tabel:     "menu",
+		RecordID:  &updated.ID,
+		DataLama:  strPtr(mustJSON(map[string]any{"status": domain.MenuStatusDisetujui})),
+		DataBaru:  strPtr(mustJSON(map[string]any{"status": domain.MenuStatusDraf, "alasan": trimmed})),
+		IPAddress: ip,
+		CreatedAt: now,
+	})
+	return &ApprovalResult{Menu: updated, Items: s.approvalDetail(ctx, updated)}, nil
+}
+
+// --- MVP-002.6 ---
+
+// KebutuhanItem is one computed row in GET kebutuhan-bahan.
+type KebutuhanItem struct {
+	BahanID      int64
+	Nama         string
+	Kategori     string
+	Satuan       string
+	GramPerPorsi float64
+	TotalGram    float64
+	Qty          float64
+	MudahRusak   bool
+}
+
+// KebutuhanResult carries the read-only simulation output.
+type KebutuhanResult struct {
+	Menu           *domain.Menu
+	TargetPorsi    int
+	CadanganPersen float64
+	Items          []KebutuhanItem
+}
+
+// GetKebutuhan implements GET /menus/{id}/kebutuhan-bahan.
+// Actors: ahli_gizi, akuntan, kepala_sppg on their own SPPG. Read-only.
+func (s *Service) GetKebutuhan(ctx context.Context, actor *authdomain.Claims, id int64, target *int, cadangan *float64) (*KebutuhanResult, error) {
+	if actor == nil {
+		return nil, domain.ErrUnauthorized
+	}
+	if actor.Role != authdomain.RoleAhliGizi && actor.Role != authdomain.RoleAkuntan && actor.Role != authdomain.RoleKepalaSPPG {
+		return nil, domain.ErrForbidden
+	}
+	if actor.SPPGID == nil {
+		return nil, domain.ErrForbidden
+	}
+	if err := domain.ValidateKebutuhanParams(target, cadangan); err != nil {
+		return nil, err
+	}
+	m, err := s.menus.FindMenuByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("find menu: %w", err)
+	}
+	if m == nil || m.SPPGID != *actor.SPPGID {
+		return nil, domain.ErrMenuNotFound
+	}
+	effTarget := m.TargetPorsi
+	if target != nil {
+		effTarget = *target
+	}
+	effCadangan := 0.0
+	if cadangan != nil {
+		effCadangan = *cadangan
+	}
+	got, err := s.menus.ListItems(ctx, []int64{m.ID})
+	if err != nil {
+		return nil, fmt.Errorf("list menu items: %w", err)
+	}
+	rows := got[m.ID]
+	items := make([]KebutuhanItem, 0, len(rows))
+	for _, it := range rows {
+		b, err := s.bahan.FindByID(ctx, it.BahanID)
+		if err != nil {
+			return nil, fmt.Errorf("find bahan: %w", err)
+		}
+		if b == nil {
+			return nil, domain.ErrBahanNotFound
+		}
+		total, qty := domain.ComputeKebutuhan(it.GramPerPorsi, b.Satuan, b.GramPerSatuan, effTarget, effCadangan)
+		items = append(items, KebutuhanItem{
+			BahanID: it.BahanID, Nama: b.Nama, Kategori: b.Kategori, Satuan: b.Satuan,
+			GramPerPorsi: it.GramPerPorsi, TotalGram: total, Qty: qty, MudahRusak: b.MudahRusak,
+		})
+	}
+	return &KebutuhanResult{Menu: m, TargetPorsi: effTarget, CadanganPersen: effCadangan, Items: items}, nil
 }
 
 func strPtr(s string) *string { return &s }

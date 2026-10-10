@@ -34,6 +34,15 @@ type MenuRepository interface {
 	DeleteMenu(ctx context.Context, id int64) error
 	// IsMenuUsed reports whether the menu is referenced by batch_produksi.
 	IsMenuUsed(ctx context.Context, menuID int64) (bool, error)
+	// SetApproval flips status plus approver columns atomically (MVP-002.5).
+	// A nil approver/approvedAt clears the approval (revert to draf).
+	SetApproval(ctx context.Context, id int64, status string, approver *int64, approvedAt *time.Time) (*domain.Menu, error)
+}
+
+// NotificationRepository delivers outbox rows for approval events.
+// Implementations resolve role recipients inside the SPPG.
+type NotificationRepository interface {
+	NotifySPPGRoles(ctx context.Context, sppgID int64, roles []string, jenis, judul, isi, refTabel string, refID int64) error
 }
 
 // SPPGProvider resolves SPPG capacity for warnings.

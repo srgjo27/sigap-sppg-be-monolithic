@@ -41,6 +41,7 @@ func main() {
 		menuSPPG    menuapplication.SPPGProvider
 		menuSekolah menuapplication.SekolahProvider
 		menuAudit   menuapplication.AuditRepository
+		menuNotifs  menuapplication.NotificationRepository
 	)
 
 	if cfg.DatabaseURL != "" {
@@ -63,6 +64,7 @@ func main() {
 		menuSPPG = mpg
 		menuSekolah = mpg
 		menuAudit = mpg
+		menuNotifs = mpg
 	} else {
 		log.Println("DATABASE_URL empty; using in-memory auth stores (dev only)")
 		mem := infrastructure.NewMemoryStores()
@@ -77,6 +79,7 @@ func main() {
 		menuSPPG = mmem
 		menuSekolah = mmem
 		menuAudit = mmem
+		menuNotifs = mmem
 	}
 
 	svc := application.New(application.Deps{
@@ -95,7 +98,7 @@ func main() {
 	mw := authhttp.NewMiddleware(issuer, svc)
 
 	menuSvc := menuapplication.New(menuapplication.Deps{
-		Bahan: menuBahan, Menus: menuRepo, SPPG: menuSPPG, Sekolah: menuSekolah, Audits: menuAudit,
+		Bahan: menuBahan, Menus: menuRepo, SPPG: menuSPPG, Sekolah: menuSekolah, Audits: menuAudit, Notifs: menuNotifs,
 	})
 	menuHandler := menuhttp.NewHandler(menuSvc)
 

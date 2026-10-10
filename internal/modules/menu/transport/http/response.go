@@ -49,6 +49,10 @@ func MapError(c *gin.Context, err error) {
 		writeError(c, http.StatusConflict, "MENU_APPROVED", "menu sudah disetujui")
 	case errors.Is(err, domain.ErrMenuInUse):
 		writeError(c, http.StatusConflict, "MENU_IN_USE", "menu sudah dipakai di batch produksi")
+	case errors.Is(err, domain.ErrMenuIncomplete):
+		writeError(c, 422, "MENU_INCOMPLETE", "menu belum lengkap")
+	case errors.Is(err, domain.ErrStatusConflict):
+		writeError(c, http.StatusConflict, "STATUS_CONFLICT", "status menu tidak sesuai")
 	case errors.Is(err, domain.ErrUnauthorized):
 		writeError(c, http.StatusUnauthorized, "UNAUTHENTICATED", "tidak login atau token kedaluwarsa")
 	case errors.Is(err, domain.ErrForbidden):

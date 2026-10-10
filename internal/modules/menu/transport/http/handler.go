@@ -386,3 +386,74 @@ func (h *Handler) DeleteMenu(c *gin.Context) {
 	}
 	c.Status(http.StatusNoContent)
 }
+
+// ApproveMenu handles POST /menus/:id/approve (MVP-002.5).
+func (h *Handler) ApproveMenu(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrMenuNotFound)
+		return
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	res, err := h.svc.ApproveMenu(c.Request.Context(), claims, id, clientIP(c))
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toApprovalResponse(res))
+}
+
+// RevertMenu handles POST /menus/:id/revert (MVP-002.5).
+func (h *Handler) RevertMenu(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrMenuNotFound)
+		return
+	}
+	var req RevertRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		MapError(c, &domain.ValidationError{Fields: map[string]string{"alasan": "required"}})
+		return
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	res, err := h.svc.RevertMenu(c.Request.Context(), claims, id, req.Alasan, clientIP(c))
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toApprovalResponse(res))
+}
+
+// GetKebutuhan handles GET /menus/:id/kebutuhan-bahan (MVP-002.6).
+func (h *Handler) GetKebutuhan(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrMenuNotFound)
+		return
+	}
+	var target *int
+	if v := c.Query("target_porsi"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"target_porsi": "must be an integer"}})
+			return
+		}
+		target = &n
+	}
+	var cadangan *float64
+	if v := c.Query("cadangan_persen"); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"cadangan_persen": "must be a number"}})
+			return
+		}
+		cadangan = &f
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	res, err := h.svc.GetKebutuhan(c.Request.Context(), claims, id, target, cadangan)
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toKebutuhanResponse(res))
+}

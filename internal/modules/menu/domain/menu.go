@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"math"
 	"strings"
 	"time"
 )
@@ -277,4 +278,72 @@ func ValidateUpdateMenu(in UpdateMenuInput) error {
 		return &ValidationError{Fields: fields}
 	}
 	return nil
+}
+
+// MenuComplete reports whether a draft is approvable (MVP-002.5):
+// at least 1 composition item and complete per-portion nutrition.
+func MenuComplete(m *Menu, items []MenuBahan) bool {
+	if m == nil || len(items) == 0 {
+		return false
+	}
+	return m.EnergiKkal > 0 && m.ProteinG > 0 && m.KarbohidratG > 0 && m.LemakG > 0
+}
+
+// ValidateRevertReason enforces the required revert alasan (MVP-002.5).
+func ValidateRevertReason(alasan string) error {
+	if strings.TrimSpace(alasan) == "" {
+		return &ValidationError{Fields: map[string]string{"alasan": "required"}}
+	}
+	return nil
+}
+
+// ValidateKebutuhanParams validates simulation params (MVP-002.6).
+func ValidateKebutuhanParams(target *int, cadangan *float64) error {
+	fields := map[string]string{}
+	if target != nil && *target <= 0 {
+		fields["target_porsi"] = "must be greater than 0"
+	}
+	if cadangan != nil {
+		if *cadangan < 0 || *cadangan > 20 {
+			fields["cadangan_persen"] = "must be between 0 and 20"
+		} else if !ValidDecimalPlaces(*cadangan) {
+			fields["cadangan_persen"] = "max 2 decimal places"
+		}
+	}
+	if len(fields) > 0 {
+		return &ValidationError{Fields: fields}
+	}
+	return nil
+}
+
+// IsCountableUnit reports whether qty must be whole numbers (butir, pcs).
+func IsCountableUnit(satuan string) bool {
+	return satuan == "butir" || satuan == "pcs"
+}
+
+// Round2 rounds half-up to 2 decimals for display totals.
+func Round2(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
+// Ceil2 rounds up to 2 decimals (qty in kg/liter/ikat).
+func Ceil2(v float64) float64 {
+	return math.Ceil(v*100-1e-9) / 100
+}
+
+// ComputeKebutuhan applies the MVP-002.6 formula:
+// total_gram = gram_per_porsi × target × (1 + cadangan/100),
+// qty = total_gram ÷ gram_per_satuan, rounded up (2dp; whole for butir/pcs).
+func ComputeKebutuhan(gramPerPorsi float64, satuan string, gramPerSatuan float64, target int, cadanganPersen float64) (totalGram, qty float64) {
+	totalGram = Round2(gramPerPorsi * float64(target) * (1 + cadanganPersen/100))
+	if gramPerSatuan <= 0 {
+		return totalGram, 0
+	}
+	raw := totalGram / gramPerSatuan
+	if IsCountableUnit(satuan) {
+		qty = math.Ceil(raw - 1e-9)
+	} else {
+		qty = Ceil2(raw)
+	}
+	return totalGram, qty
 }

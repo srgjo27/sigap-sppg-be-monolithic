@@ -44,7 +44,7 @@ func newFixture() *fixture {
 	cap := 100
 	menuStore.SeedSPPG(1, &cap, 250)
 	menuSvc := menuapplication.New(menuapplication.Deps{
-		Bahan: menuStore, Menus: menuStore, SPPG: menuStore, Sekolah: menuStore, Audits: menuStore,
+		Bahan: menuStore, Menus: menuStore, SPPG: menuStore, Sekolah: menuStore, Audits: menuStore, Notifs: menuStore,
 	})
 	menuHandler := NewHandler(menuSvc)
 

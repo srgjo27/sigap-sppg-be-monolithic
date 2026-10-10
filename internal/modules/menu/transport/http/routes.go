@@ -35,6 +35,12 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *authhttp.Middleware) {
 		authdomain.RolePengawas,
 	)
 	canWriteMenu := mw.RequireRoles(authdomain.RoleAhliGizi)
+	canApproveMenu := mw.RequireRoles(authdomain.RoleKepalaSPPG)
+	canReadKebutuhan := mw.RequireRoles(
+		authdomain.RoleAhliGizi,
+		authdomain.RoleAkuntan,
+		authdomain.RoleKepalaSPPG,
+	)
 
 	rg.GET("/bahan", mw.Authenticate(), freshPassword, readOnly, canReadBahan, h.ListBahan)
 	rg.POST("/bahan", mw.Authenticate(), freshPassword, readOnly, canWriteBahan, h.CreateBahan)
@@ -45,4 +51,7 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *authhttp.Middleware) {
 	rg.GET("/menus/:id", mw.Authenticate(), freshPassword, readOnly, canReadMenu, h.GetMenu)
 	rg.PATCH("/menus/:id", mw.Authenticate(), freshPassword, readOnly, canWriteMenu, h.UpdateMenu)
 	rg.DELETE("/menus/:id", mw.Authenticate(), freshPassword, readOnly, canWriteMenu, h.DeleteMenu)
+	rg.POST("/menus/:id/approve", mw.Authenticate(), freshPassword, readOnly, canApproveMenu, h.ApproveMenu)
+	rg.POST("/menus/:id/revert", mw.Authenticate(), freshPassword, readOnly, canApproveMenu, h.RevertMenu)
+	rg.GET("/menus/:id/kebutuhan-bahan", mw.Authenticate(), freshPassword, readOnly, canReadKebutuhan, h.GetKebutuhan)
 }

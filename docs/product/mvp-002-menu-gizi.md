@@ -281,3 +281,107 @@ DELETE: HTTP 204
 - [ ] Old and new values are stored in audit\_log.
 - [ ] Unit tests exist.
 - [ ] Integration test exists.
+
+## MVP-002.5 Approve & revert menu
+ 
+### Goal
+ 
+Kepala SPPG menyetujui menu sebelum bahan dipesan dan dimasak, atau mengembalikannya ke draf untuk diperbaiki.
+ 
+### Actor
+ 
+kepala\_sppg
+ 
+### Input
+ 
+`POST /api/v1/menus/{id}/approve`
+ 
+`POST /api/v1/menus/{id}/revert`
+ 
+- alasan (wajib untuk revert)
+### Rules
+ 
+- approve hanya untuk menu `draf` yang punya minimal 1 bahan dan nilai gizi lengkap
+- approve mengisi `disetujui_oleh`, `disetujui_at`, dan mengubah status ke `disetujui`
+- revert hanya untuk menu `disetujui` yang belum dipakai di `batch_produksi`
+- revert mengosongkan `disetujui_oleh` dan `disetujui_at`, status kembali `draf`, alasan dicatat di audit\_log
+- setelah approve, akuntan dan ahli gizi menerima notifikasi bahwa kebutuhan bahan siap dipesan
+### Success
+ 
+HTTP 200
+ 
+Returns menu dengan status terbaru
+ 
+### Failure
+ 
+400: alasan revert kosong
+ 
+401: tidak login
+ 
+403: bukan kepala\_sppg
+ 
+404: menu not found atau milik SPPG lain
+ 
+409: status tidak sesuai (approve menu yang sudah disetujui, revert menu draf) atau menu sudah dipakai batch
+ 
+422: menu belum lengkap (tanpa bahan atau nilai gizi)
+ 
+500: unexpected internal error
+ 
+### Acceptance Criteria
+ 
+- [ ] Only complete draft menus can be approved.
+- [ ] Approved menu stores approver and timestamp.
+- [ ] Menu used by a production batch cannot be reverted.
+- [ ] Revert requires a reason, written to audit\_log.
+- [ ] Notification is created for akuntan and ahli\_gizi on approval.
+- [ ] Unit tests exist.
+- [ ] Integration test exists.
+ 
+## MVP-002.6 Kebutuhan bahan
+ 
+### Goal
+ 
+Akuntan dan ahli gizi langsung tahu berapa banyak setiap bahan yang harus dipesan untuk satu menu, sebagai dasar purchase order di M3.
+ 
+### Actor
+ 
+ahli\_gizi, akuntan, kepala\_sppg
+ 
+### Input
+ 
+`GET /api/v1/menus/{id}/kebutuhan-bahan`
+ 
+- target\_porsi (opsional, untuk simulasi tanpa mengubah menu)
+- cadangan\_persen (opsional, default 0, maks 20; tambahan untuk susut/rusak)
+### Rules
+ 
+- rumus per bahan: `total_gram = gram_per_porsi × target_porsi × (1 + cadangan_persen/100)`
+- dikonversi ke satuan bahan: `qty = total_gram ÷ bahan.gram_per_satuan`, dibulatkan ke atas 2 desimal (butir dan pcs dibulatkan ke atas ke bilangan bulat)
+- endpoint hanya membaca, tidak menyimpan apa pun
+- bisa dipanggil untuk menu draf (simulasi) maupun disetujui; response menyertakan status menu
+### Success
+ 
+HTTP 200
+ 
+Returns `menu {id, tanggal, nama_menu, status}`, `target_porsi`, `cadangan_persen`, dan `items[]` {bahan\_id, nama, kategori, satuan, gram\_per\_porsi, total\_gram, qty, mudah\_rusak}
+ 
+### Failure
+ 
+400: invalid input (target\_porsi ≤ 0, cadangan di luar 0–20)
+ 
+401: tidak login
+ 
+403: peran tidak berhak
+ 
+404: menu not found atau milik SPPG lain
+ 
+500: unexpected internal error
+ 
+### Acceptance Criteria
+ 
+- [ ] Quantities match the formula, including unit conversion and rounding.
+- [ ] Countable units (butir, pcs) are rounded up to whole numbers.
+- [ ] Simulation parameters do not change stored data.
+- [ ] Unit tests cover conversion and rounding cases.
+- [ ] Integration test exists.
