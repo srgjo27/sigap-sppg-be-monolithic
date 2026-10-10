@@ -7,7 +7,7 @@ import (
 	authhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/transport/http"
 )
 
-// RegisterRoutes mounts MVP-002.1 through MVP-002.4 endpoints under /api/v1.
+// RegisterRoutes mounts MVP-002.1 through MVP-002.7 endpoints under /api/v1.
 // RBAC follows docs/product/mvp-002-menu-gizi.md and reuses MVP-001.8 middleware.
 func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *authhttp.Middleware) {
 	freshPassword := mw.RequirePasswordChanged()
@@ -54,4 +54,5 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *authhttp.Middleware) {
 	rg.POST("/menus/:id/approve", mw.Authenticate(), freshPassword, readOnly, canApproveMenu, h.ApproveMenu)
 	rg.POST("/menus/:id/revert", mw.Authenticate(), freshPassword, readOnly, canApproveMenu, h.RevertMenu)
 	rg.GET("/menus/:id/kebutuhan-bahan", mw.Authenticate(), freshPassword, readOnly, canReadKebutuhan, h.GetKebutuhan)
+	rg.POST("/menus/:id/copy", mw.Authenticate(), freshPassword, readOnly, canWriteMenu, h.CopyMenu)
 }

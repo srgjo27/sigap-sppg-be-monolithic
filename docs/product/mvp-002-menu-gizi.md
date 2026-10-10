@@ -385,3 +385,54 @@ Returns `menu {id, tanggal, nama_menu, status}`, `target_porsi`, `cadangan_perse
 - [ ] Simulation parameters do not change stored data.
 - [ ] Unit tests cover conversion and rounding cases.
 - [ ] Integration test exists.
+
+## MVP-002.7 Copy menu
+ 
+### Goal
+ 
+Ahli gizi menyusun menu mingguan dengan cepat dengan menyalin menu yang sudah ada ke satu atau beberapa tanggal lain.
+ 
+### Actor
+ 
+ahli\_gizi
+ 
+### Input
+ 
+`POST /api/v1/menus/{id}/copy`
+ 
+- tanggal\_tujuan\[\] (1–7 tanggal)
+### Rules
+ 
+- sumber boleh berstatus draf atau disetujui, dari SPPG yang sama
+- setiap tanggal tujuan tidak boleh di masa lalu dan belum punya menu
+- salinan selalu berstatus `draf`, dengan `dibuat_oleh` = user saat ini dan target\_porsi dihitung ulang dari jumlah penerima terkini
+- bahan yang sudah nonaktif tidak ikut disalin dan dilaporkan di `warnings[]`
+- semua salinan dibuat dalam satu transaksi: bila satu tanggal gagal, tidak ada yang dibuat
+### Success
+ 
+HTTP 201
+ 
+Returns `data[]` menu baru dan `warnings[]`
+ 
+### Failure
+ 
+400: invalid input (lebih dari 7 tanggal, tanggal duplikat, atau di masa lalu)
+ 
+401: tidak login
+ 
+403: bukan ahli\_gizi
+ 
+404: menu sumber not found atau milik SPPG lain
+ 
+409: salah satu tanggal tujuan sudah punya menu (sebutkan tanggalnya)
+ 
+500: unexpected internal error
+ 
+### Acceptance Criteria
+ 
+- [ ] Copies are created as drafts for every target date in one transaction.
+- [ ] Conflict on any date rejects the whole request with 409.
+- [ ] Inactive ingredients are skipped and reported.
+- [ ] Data is persisted to PostgreSQL and written to audit\_log.
+- [ ] Unit tests exist.
+- [ ] Integration test exists.

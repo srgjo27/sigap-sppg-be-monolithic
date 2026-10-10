@@ -305,3 +305,35 @@ func toKebutuhanResponse(res *application.KebutuhanResult) KebutuhanResponse {
 		TargetPorsi: res.TargetPorsi, CadanganPersen: res.CadanganPersen, Items: items,
 	}
 }
+
+// CopyMenuRequest is POST /menus/{id}/copy input.
+type CopyMenuRequest struct {
+	TanggalTujuan []string `json:"tanggal_tujuan"`
+}
+
+// CopyMenuResponse is the MVP-002.7 success payload.
+type CopyMenuResponse struct {
+	Data     []CreateMenuResponse `json:"data"`
+	Warnings []string             `json:"warnings"`
+}
+
+func toCopyMenuResponse(res *application.CopyMenuResult) CopyMenuResponse {
+	data := make([]CreateMenuResponse, 0, len(res.Menus))
+	for i, m := range res.Menus {
+		items := make([]MenuBahanResponse, 0, len(res.Items[i]))
+		for _, it := range res.Items[i] {
+			items = append(items, MenuBahanResponse{BahanID: it.BahanID, Nama: it.BahanNama, GramPerPorsi: it.GramPerPorsi})
+		}
+		data = append(data, CreateMenuResponse{
+			ID: m.ID, Tanggal: m.Tanggal.Format("2006-01-02"), NamaMenu: m.NamaMenu,
+			Gizi:        MenuGiziResponse{EnergiKkal: m.EnergiKkal, ProteinG: m.ProteinG, KarbohidratG: m.KarbohidratG, LemakG: m.LemakG},
+			TargetPorsi: m.TargetPorsi, Status: m.Status, Bahan: items,
+			DibuatOleh: m.DibuatOleh, CreatedAt: m.CreatedAt, Warnings: []string{},
+		})
+	}
+	warnings := res.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return CopyMenuResponse{Data: data, Warnings: warnings}
+}

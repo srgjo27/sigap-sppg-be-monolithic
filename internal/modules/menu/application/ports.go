@@ -37,6 +37,9 @@ type MenuRepository interface {
 	// SetApproval flips status plus approver columns atomically (MVP-002.5).
 	// A nil approver/approvedAt clears the approval (revert to draf).
 	SetApproval(ctx context.Context, id int64, status string, approver *int64, approvedAt *time.Time) (*domain.Menu, error)
+	// CreateMenus stores several menus with items in one transaction (MVP-002.7).
+	// Either all rows persist or none. len(menus) must equal len(items).
+	CreateMenus(ctx context.Context, menus []*domain.Menu, items [][]domain.MenuBahan) ([]*domain.Menu, [][]domain.MenuBahan, error)
 }
 
 // NotificationRepository delivers outbox rows for approval events.

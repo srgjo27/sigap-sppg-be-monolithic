@@ -627,6 +627,139 @@ func menuSnapshot(m *domain.Menu) map[string]any {
 	}
 }
 
+// --- MVP-002.7 ---
+
+// CopyMenuResult carries copied menus with their items plus warnings.
+type CopyMenuResult struct {
+	Menus    []*domain.Menu
+	Items    [][]domain.MenuBahan
+	Warnings []string
+}
+
+// CopyMenu implements POST /menus/{id}/copy. Actor: ahli_gizi, own SPPG.
+// The source may be draf or disetujui; every copy is a fresh draf with the
+// current user as author and target_porsi recalculated from today's
+// recipients. Inactive bahan are skipped and reported. All copies persist
+// in one transaction.
+func (s *Service) CopyMenu(ctx context.Context, actor *authdomain.Claims, sourceID int64, in domain.CopyMenuInput, ip *string) (*CopyMenuResult, error) {
+	if actor == nil {
+		return nil, domain.ErrUnauthorized
+	}
+	if actor.Role != authdomain.RoleAhliGizi {
+		return nil, domain.ErrForbidden
+	}
+	if actor.SPPGID == nil {
+		return nil, domain.ErrForbidden
+	}
+	now := s.clock()
+	if err := domain.ValidateCopyMenuInput(in, now); err != nil {
+		return nil, err
+	}
+	source, err := s.menus.FindMenuByID(ctx, sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("find menu: %w", err)
+	}
+	if source == nil || source.SPPGID != *actor.SPPGID {
+		return nil, domain.ErrMenuNotFound
+	}
+	got, err := s.menus.ListItems(ctx, []int64{source.ID})
+	if err != nil {
+		return nil, fmt.Errorf("list menu items: %w", err)
+	}
+	srcItems := got[source.ID]
+	// Every target date must be free; the first conflict rejects everything.
+	for _, t := range in.TanggalTujuan {
+		exists, err := s.menus.ExistsBySPPGDate(ctx, *actor.SPPGID, t)
+		if err != nil {
+			return nil, fmt.Errorf("check menu date: %w", err)
+		}
+		if exists {
+			return nil, &domain.MenuDateConflictError{Tanggal: t.Format("2006-01-02")}
+		}
+	}
+	// Resolve source composition; inactive bahan are skipped with warnings.
+	type activeItem struct {
+		bahan domain.Bahan
+		gram  float64
+	}
+	var active []activeItem
+	var warnings []string
+	for _, it := range srcItems {
+		b, err := s.bahan.FindByID(ctx, it.BahanID)
+		if err != nil {
+			return nil, fmt.Errorf("find bahan: %w", err)
+		}
+		if b == nil {
+			return nil, domain.ErrBahanNotFound
+		}
+		if !b.Aktif {
+			warnings = append(warnings, fmt.Sprintf("bahan %q tidak disalin karena nonaktif", b.Nama))
+			continue
+		}
+		active = append(active, activeItem{bahan: *b, gram: it.GramPerPorsi})
+	}
+	sum, err := s.sekolah.SumRecipients(ctx, *actor.SPPGID)
+	if err != nil {
+		return nil, fmt.Errorf("sum recipients: %w", err)
+	}
+	if sum <= 0 {
+		return nil, &domain.ValidationError{Fields: map[string]string{"target_porsi": "no recipients found for sppg"}}
+	}
+	if capPtr, found, err := s.sppg.GetCapacity(ctx, *actor.SPPGID); err != nil {
+		return nil, fmt.Errorf("get sppg capacity: %w", err)
+	} else if found && capPtr != nil && sum > *capPtr {
+		warnings = append(warnings, fmt.Sprintf("target_porsi %d exceeds sppg capacity %d", sum, *capPtr))
+	}
+	menus := make([]*domain.Menu, 0, len(in.TanggalTujuan))
+	allItems := make([][]domain.MenuBahan, 0, len(in.TanggalTujuan))
+	for _, t := range in.TanggalTujuan {
+		var catatan *string
+		if source.Catatan != nil {
+			v := *source.Catatan
+			catatan = &v
+		}
+		menus = append(menus, &domain.Menu{
+			SPPGID:       *actor.SPPGID,
+			Tanggal:      t,
+			NamaMenu:     source.NamaMenu,
+			EnergiKkal:   source.EnergiKkal,
+			ProteinG:     source.ProteinG,
+			KarbohidratG: source.KarbohidratG,
+			LemakG:       source.LemakG,
+			TargetPorsi:  sum,
+			Catatan:      catatan,
+			DibuatOleh:   actor.UserID,
+			Status:       domain.MenuStatusDraf,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		})
+		var items []domain.MenuBahan
+		for _, a := range active {
+			items = append(items, domain.MenuBahan{BahanID: a.bahan.ID, BahanNama: a.bahan.Nama, GramPerPorsi: a.gram})
+		}
+		allItems = append(allItems, items)
+	}
+	createdMenus, createdItems, err := s.menus.CreateMenus(ctx, menus, allItems)
+	if err != nil {
+		return nil, fmt.Errorf("copy menu: %w", err)
+	}
+	for _, cm := range createdMenus {
+		_ = s.audits.Append(ctx, &authdomain.AuditEntry{
+			UserID:    &actor.UserID,
+			Aksi:      authdomain.AuditCreate,
+			Tabel:     "menu",
+			RecordID:  &cm.ID,
+			DataBaru:  strPtr(mustJSON(map[string]any{"tanggal": cm.Tanggal.Format("2006-01-02"), "nama_menu": cm.NamaMenu, "copied_from": sourceID})),
+			IPAddress: ip,
+			CreatedAt: now,
+		})
+	}
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return &CopyMenuResult{Menus: createdMenus, Items: createdItems, Warnings: warnings}, nil
+}
+
 // --- MVP-002.5 ---
 
 // ApprovalResult carries a menu with its composition after status change.

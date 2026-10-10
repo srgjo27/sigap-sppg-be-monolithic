@@ -32,6 +32,11 @@ func MapError(c *gin.Context, err error) {
 		c.JSON(http.StatusBadRequest, ErrorEnvelope{Error: ErrorBody{Code: "VALIDATION_ERROR", Message: "invalid input", Fields: ve.Fields}})
 		return
 	}
+	var dateConflict *domain.MenuDateConflictError
+	if errors.As(err, &dateConflict) {
+		c.JSON(http.StatusConflict, ErrorEnvelope{Error: ErrorBody{Code: "MENU_EXISTS", Message: "menu untuk tanggal " + dateConflict.Tanggal + " already exists"}})
+		return
+	}
 	switch {
 	case errors.Is(err, domain.ErrBahanExists):
 		writeError(c, http.StatusConflict, "BAHAN_EXISTS", "nama bahan already exists")

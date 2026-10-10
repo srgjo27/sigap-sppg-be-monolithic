@@ -457,3 +457,33 @@ func (h *Handler) GetKebutuhan(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, toKebutuhanResponse(res))
 }
+
+// CopyMenu handles POST /menus/:id/copy (MVP-002.7).
+func (h *Handler) CopyMenu(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrMenuNotFound)
+		return
+	}
+	var req CopyMenuRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		MapError(c, &domain.ValidationError{Fields: map[string]string{"tanggal_tujuan": "at least 1 date is required"}})
+		return
+	}
+	dates := make([]time.Time, 0, len(req.TanggalTujuan))
+	for _, raw := range req.TanggalTujuan {
+		t, err := time.Parse("2006-01-02", raw)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"tanggal_tujuan": "use YYYY-MM-DD"}})
+			return
+		}
+		dates = append(dates, t)
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	res, err := h.svc.CopyMenu(c.Request.Context(), claims, id, domain.CopyMenuInput{TanggalTujuan: dates}, clientIP(c))
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, toCopyMenuResponse(res))
+}

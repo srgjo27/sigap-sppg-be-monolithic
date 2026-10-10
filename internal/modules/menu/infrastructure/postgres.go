@@ -3,10 +3,12 @@ package infrastructure
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	authdomain "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/domain"
@@ -60,8 +62,8 @@ func scanBahan(row interface{ Scan(...any) error }) (*domain.Bahan, error) {
 // Create inserts a bahan.
 func (p *Postgres) Create(ctx context.Context, b *domain.Bahan) (*domain.Bahan, error) {
 	const q = `INSERT INTO bahan (nama, kategori, satuan, gram_per_satuan, mudah_rusak, suhu_simpan_maks, aktif, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,true,now(),now()) RETURNING ` + bahanColumns
-	row := p.Pool.QueryRow(ctx, q, b.Nama, b.Kategori, b.Satuan, b.GramPerSatuan, b.MudahRusak, nullableFloat(b.SuhuSimpanMaks))
+		VALUES ($1,$2,$3,$4,$5,$6,$7,now(),now()) RETURNING ` + bahanColumns
+	row := p.Pool.QueryRow(ctx, q, b.Nama, b.Kategori, b.Satuan, b.GramPerSatuan, b.MudahRusak, nullableFloat(b.SuhuSimpanMaks), b.Aktif)
 	created, err := scanBahan(row)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -185,6 +187,54 @@ func (p *Postgres) CreateMenu(ctx context.Context, menu *domain.Menu, items []do
 		return nil, nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	created, stored, err := insertMenuTx(ctx, tx, menu, items)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, fmt.Errorf("commit menu: %w", err)
+	}
+	return created, stored, nil
+}
+
+// CreateMenus stores several menus with items in one transaction (MVP-002.7).
+// Either all rows persist or none.
+func (p *Postgres) CreateMenus(ctx context.Context, menus []*domain.Menu, items [][]domain.MenuBahan) ([]*domain.Menu, [][]domain.MenuBahan, error) {
+	if len(menus) != len(items) {
+		return nil, nil, &domain.ValidationError{Fields: map[string]string{"bahan": "menus and items length mismatch"}}
+	}
+	tx, err := p.Pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	outMenus := make([]*domain.Menu, 0, len(menus))
+	outItems := make([][]domain.MenuBahan, 0, len(items))
+	for i, menu := range menus {
+		created, stored, err := insertMenuTx(ctx, tx, menu, items[i])
+		if err != nil {
+			var conflict *domain.MenuDateConflictError
+			if errors.As(err, &conflict) {
+				return nil, nil, err
+			}
+			// A unique violation here means a target date collision (race
+			// with the service-level pre-check); name the date per MVP-002.7.
+			if isUniqueViolation(err) {
+				return nil, nil, &domain.MenuDateConflictError{Tanggal: menu.Tanggal.Format("2006-01-02")}
+			}
+			return nil, nil, err
+		}
+		outMenus = append(outMenus, created)
+		outItems = append(outItems, stored)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, fmt.Errorf("commit menus: %w", err)
+	}
+	return outMenus, outItems, nil
+}
+
+// insertMenuTx inserts one menu plus items inside an existing transaction.
+func insertMenuTx(ctx context.Context, tx pgx.Tx, menu *domain.Menu, items []domain.MenuBahan) (*domain.Menu, []domain.MenuBahan, error) {
 	const mq = `INSERT INTO menu (sppg_id, tanggal, nama_menu, energi_kkal, protein_g, karbohidrat_g, lemak_g, target_porsi, dibuat_oleh, status, catatan, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'draf',$10,now(),now())
 		RETURNING id, sppg_id, tanggal, nama_menu, energi_kkal, protein_g, karbohidrat_g, lemak_g, target_porsi, catatan, dibuat_oleh, status, disetujui_oleh, disetujui_at, created_at, updated_at`
@@ -193,7 +243,7 @@ func (p *Postgres) CreateMenu(ctx context.Context, menu *domain.Menu, items []do
 	created, err := scanMenu(row)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return nil, nil, domain.ErrMenuExists
+			return nil, nil, &domain.MenuDateConflictError{Tanggal: menu.Tanggal.Format("2006-01-02")}
 		}
 		return nil, nil, fmt.Errorf("insert menu: %w", err)
 	}
@@ -214,9 +264,6 @@ func (p *Postgres) CreateMenu(ctx context.Context, menu *domain.Menu, items []do
 			return nil, nil, fmt.Errorf("resolve bahan nama: %w", err)
 		}
 		stored = append(stored, domain.MenuBahan{ID: id, MenuID: created.ID, BahanID: it.BahanID, BahanNama: nama, GramPerPorsi: it.GramPerPorsi})
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, nil, fmt.Errorf("commit menu: %w", err)
 	}
 	return created, stored, nil
 }

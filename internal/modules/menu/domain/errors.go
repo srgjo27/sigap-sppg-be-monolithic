@@ -25,3 +25,13 @@ type ValidationError struct {
 }
 
 func (e *ValidationError) Error() string { return "validation failed" }
+
+// MenuDateConflictError carries the conflicting target date for copy (409).
+// Unlike ErrMenuExists it names the date, as required by MVP-002.7.
+type MenuDateConflictError struct {
+	Tanggal string
+}
+
+func (e *MenuDateConflictError) Error() string {
+	return "menu for tanggal " + e.Tanggal + " already exists"
+}

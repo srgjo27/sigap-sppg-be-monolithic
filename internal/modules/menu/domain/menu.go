@@ -347,3 +347,31 @@ func ComputeKebutuhan(gramPerPorsi float64, satuan string, gramPerSatuan float64
 	}
 	return totalGram, qty
 }
+
+// CopyMenuInput is the validated domain input for POST /menus/{id}/copy.
+type CopyMenuInput struct {
+	TanggalTujuan []time.Time
+}
+
+// ValidateCopyMenuInput enforces MVP-002.7 rules without database access:
+// 1–7 target dates, no duplicates, none in the past.
+func ValidateCopyMenuInput(in CopyMenuInput, today time.Time) error {
+	if len(in.TanggalTujuan) == 0 {
+		return &ValidationError{Fields: map[string]string{"tanggal_tujuan": "at least 1 date is required"}}
+	}
+	if len(in.TanggalTujuan) > 7 {
+		return &ValidationError{Fields: map[string]string{"tanggal_tujuan": "max 7 dates"}}
+	}
+	seen := map[string]bool{}
+	for _, t := range in.TanggalTujuan {
+		key := truncDate(t).Format("2006-01-02")
+		if seen[key] {
+			return &ValidationError{Fields: map[string]string{"tanggal_tujuan": "duplicate date " + key}}
+		}
+		seen[key] = true
+		if truncDate(t).Before(truncDate(today)) {
+			return &ValidationError{Fields: map[string]string{"tanggal_tujuan": "must not be in the past"}}
+		}
+	}
+	return nil
+}

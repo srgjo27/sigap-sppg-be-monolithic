@@ -271,28 +271,52 @@ func itoa(v int64) string {
 
 // CreateMenu implements MenuRepository atomically.
 func (m *MemoryStores) CreateMenu(ctx context.Context, menu *domain.Menu, items []domain.MenuBahan) (*domain.Menu, []domain.MenuBahan, error) {
+	menus, allItems, err := m.CreateMenus(ctx, []*domain.Menu{menu}, [][]domain.MenuBahan{items})
+	if err != nil {
+		return nil, nil, err
+	}
+	return menus[0], allItems[0], nil
+}
+
+// CreateMenus implements MenuRepository: all rows persist or none.
+func (m *MemoryStores) CreateMenus(ctx context.Context, menus []*domain.Menu, items [][]domain.MenuBahan) ([]*domain.Menu, [][]domain.MenuBahan, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	key := menuDateKey(menu.SPPGID, menu.Tanggal)
-	if _, ok := m.menuDateIndex[key]; ok {
-		return nil, nil, domain.ErrMenuExists
+	if len(menus) != len(items) {
+		return nil, nil, &domain.ValidationError{Fields: map[string]string{"bahan": "menus and items length mismatch"}}
 	}
-	menu.ID = m.nextMenuID
-	m.nextMenuID++
-	cp := *menu
-	m.menus[cp.ID] = &cp
-	stored := make([]domain.MenuBahan, 0, len(items))
-	for _, it := range items {
-		it.ID = m.nextMenuBahanID
-		m.nextMenuBahanID++
-		it.MenuID = cp.ID
-		stored = append(stored, it)
+	seen := map[string]bool{}
+	for _, menu := range menus {
+		key := menuDateKey(menu.SPPGID, menu.Tanggal)
+		if seen[key] {
+			return nil, nil, &domain.MenuDateConflictError{Tanggal: menu.Tanggal.Format("2006-01-02")}
+		}
+		seen[key] = true
+		if _, ok := m.menuDateIndex[key]; ok {
+			return nil, nil, &domain.MenuDateConflictError{Tanggal: menu.Tanggal.Format("2006-01-02")}
+		}
 	}
-	m.menuItems[cp.ID] = stored
-	m.menuDateIndex[key] = cp.ID
-	out := cp
-	outItems := append([]domain.MenuBahan{}, stored...)
-	return &out, outItems, nil
+	outMenus := make([]*domain.Menu, 0, len(menus))
+	outItems := make([][]domain.MenuBahan, 0, len(items))
+	for i, menu := range menus {
+		menu.ID = m.nextMenuID
+		m.nextMenuID++
+		cp := *menu
+		m.menus[cp.ID] = &cp
+		stored := make([]domain.MenuBahan, 0, len(items[i]))
+		for _, it := range items[i] {
+			it.ID = m.nextMenuBahanID
+			m.nextMenuBahanID++
+			it.MenuID = cp.ID
+			stored = append(stored, it)
+		}
+		m.menuItems[cp.ID] = stored
+		m.menuDateIndex[menuDateKey(cp.SPPGID, cp.Tanggal)] = cp.ID
+		out := cp
+		outMenus = append(outMenus, &out)
+		outItems = append(outItems, append([]domain.MenuBahan{}, stored...))
+	}
+	return outMenus, outItems, nil
 }
 
 // ExistsBySPPGDate implements MenuRepository.
