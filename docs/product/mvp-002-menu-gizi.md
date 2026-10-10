@@ -172,3 +172,112 @@ Returns created menu: `id, tanggal, nama_menu, gizi {energi_kkal, protein_g, kar
 - [ ] Created entity is returned.
 - [ ] Unit tests exist.
 - [ ] Integration test exists.
+
+## MVP-002.3 List & detail menu
+ 
+### Goal
+ 
+Semua pihak di SPPG melihat menu harian dan mingguan; pengawas melihat lintas SPPG.
+ 
+### Actor
+ 
+Semua peran SPPG, pengawas, admin; pic\_sekolah hanya menu disetujui
+ 
+### Input
+ 
+`GET /api/v1/menus`
+ 
+- dari, sampai (wajib; maks 31 hari)
+- status (opsional)
+- sppg\_id (hanya admin dan pengawas)
+`GET /api/v1/menus/{id}`
+ 
+### Rules
+ 
+- default urutan tanggal naik
+- peran selain admin/pengawas otomatis difilter ke sppg\_id miliknya
+- pic\_sekolah hanya melihat menu `disetujui` dari SPPG yang melayani sekolahnya, tanpa komposisi gram (cukup nama menu dan nilai gizi)
+- tanggal tanpa menu dikembalikan di `meta.tanggal_kosong[]` agar frontend bisa menandai hari yang belum direncanakan
+### Success
+ 
+HTTP 200
+ 
+List: `data[]` (id, tanggal, nama\_menu, gizi, target\_porsi, status) dan `meta` (dari, sampai, total, tanggal\_kosong\[\])
+ 
+Detail: menu lengkap dengan `bahan[]`, `dibuat_oleh`, `disetujui_oleh`, `disetujui_at`
+ 
+### Failure
+ 
+400: invalid input (rentang terbalik atau lebih dari 31 hari)
+ 
+401: tidak login
+ 
+404: menu not found atau milik SPPG lain
+ 
+500: unexpected internal error
+ 
+### Acceptance Criteria
+ 
+- [ ] Date range filter works and is limited to 31 days.
+- [ ] Users never see menus from another SPPG.
+- [ ] pic\_sekolah sees approved menus only, without ingredient grams.
+- [ ] Days without a menu are listed in meta.
+- [ ] Unit tests exist.
+- [ ] Integration test exists.
+
+## MVP-002.4 Update & delete menu draf
+ 
+### Goal
+ 
+Ahli gizi memperbaiki menu sebelum disetujui, atau menghapus menu yang batal.
+ 
+### Actor
+ 
+ahli\_gizi
+ 
+### Input
+ 
+`PATCH /api/v1/menus/{id}` (semua field opsional)
+ 
+- nama\_menu
+- energi\_kkal, protein\_g, karbohidrat\_g, lemak\_g
+- target\_porsi
+- catatan
+- bahan\[\] (bila dikirim, menggantikan seluruh komposisi)
+`DELETE /api/v1/menus/{id}`
+ 
+### Rules
+ 
+- hanya menu berstatus `draf` yang bisa diubah atau dihapus
+- tanggal tidak bisa diubah; untuk pindah tanggal gunakan copy (MVP-002.7) lalu hapus
+- aturan validasi sama dengan MVP-002.2
+- penggantian bahan\[\] dilakukan dalam satu transaksi
+- DELETE menghapus menu beserta `menu_bahan` (cascade); nilai lama disimpan di audit\_log
+### Success
+ 
+PATCH: HTTP 200, returns updated menu
+ 
+DELETE: HTTP 204
+ 
+### Failure
+ 
+400: invalid input
+ 
+401: tidak login
+ 
+403: bukan ahli\_gizi
+ 
+404: menu not found atau milik SPPG lain
+ 
+409: menu sudah disetujui atau sudah dipakai di batch produksi
+ 
+500: unexpected internal error
+ 
+### Acceptance Criteria
+ 
+- [ ] Only draft menus can be changed or deleted.
+- [ ] Sending bahan\[\] replaces the whole composition atomically.
+- [ ] Date cannot be changed.
+- [ ] Old and new values are stored in audit\_log.
+- [ ] Unit tests exist.
+- [ ] Integration test exists.

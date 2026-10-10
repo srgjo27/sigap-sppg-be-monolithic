@@ -37,6 +37,14 @@ type MenuBahan struct {
 // MenuStatusDraf is the only status assigned at creation (MVP-002.2).
 const MenuStatusDraf = "draf"
 
+// MenuStatusDisetujui marks an approved menu (MVP-002.5).
+const MenuStatusDisetujui = "disetujui"
+
+// IsValidMenuStatus reports whether s is a known menu status.
+func IsValidMenuStatus(s string) bool {
+	return s == MenuStatusDraf || s == MenuStatusDisetujui
+}
+
 // MenuBahanInput is one composition item in POST /menus.
 type MenuBahanInput struct {
 	BahanID      int64
@@ -135,6 +143,134 @@ func ValidateCreateMenu(in CreateMenuInput, today time.Time) error {
 		}
 		if dup {
 			return &ValidationError{Fields: map[string]string{"bahan": "duplicate bahan_id in composition"}}
+		}
+	}
+	if len(fields) > 0 {
+		return &ValidationError{Fields: fields}
+	}
+	return nil
+}
+
+// MenuFilter scopes GET /menus (MVP-002.3).
+type MenuFilter struct {
+	Dari   time.Time
+	Sampai time.Time
+	Status *string
+	SPPGID *int64
+}
+
+// ValidateMenuFilter enforces required range, order, and max 31 days inclusive.
+func ValidateMenuFilter(f MenuFilter) error {
+	fields := map[string]string{}
+	if f.Dari.IsZero() {
+		fields["dari"] = "required (YYYY-MM-DD)"
+	}
+	if f.Sampai.IsZero() {
+		fields["sampai"] = "required (YYYY-MM-DD)"
+	}
+	if len(fields) > 0 {
+		return &ValidationError{Fields: fields}
+	}
+	dari := truncDate(f.Dari)
+	sampai := truncDate(f.Sampai)
+	if sampai.Before(dari) {
+		return &ValidationError{Fields: map[string]string{"sampai": "must not be before dari"}}
+	}
+	inclusiveDays := int(sampai.Sub(dari).Hours()/24) + 1
+	if inclusiveDays > 31 {
+		return &ValidationError{Fields: map[string]string{"sampai": "max 31 days range"}}
+	}
+	if f.Status != nil && !IsValidMenuStatus(*f.Status) {
+		return &ValidationError{Fields: map[string]string{"status": "unknown status"}}
+	}
+	return nil
+}
+
+// MissingDates returns YYYY-MM-DD dates in [dari, sampai] without a menu.
+func MissingDates(dari, sampai time.Time, present map[string]bool) []string {
+	var out []string
+	for d := truncDate(dari); !d.After(truncDate(sampai)); d = d.Add(24 * time.Hour) {
+		key := d.Format("2006-01-02")
+		if !present[key] {
+			out = append(out, key)
+		}
+	}
+	if out == nil {
+		out = []string{}
+	}
+	return out
+}
+
+// UpdateMenuInput is the domain patch for PATCH /menus/{id} (MVP-002.4).
+// Nil pointers mean no change. Tanggal is intentionally absent: it cannot
+// be changed; use copy (MVP-002.7) then delete.
+type UpdateMenuInput struct {
+	NamaMenu     *string
+	EnergiKkal   *float64
+	ProteinG     *float64
+	KarbohidratG *float64
+	LemakG       *float64
+	TargetPorsi  *int
+	Catatan      *string
+	ClearCatatan bool
+	Items        *[]MenuBahanInput
+}
+
+func checkGiziField(v *float64, max float64, name string, fields map[string]string) {
+	if v == nil {
+		return
+	}
+	if *v <= 0 {
+		fields[name] = "must be greater than 0"
+	} else if *v > max {
+		fields[name] = "value too large"
+	} else if !ValidDecimalPlaces(*v) {
+		fields[name] = "max 2 decimal places"
+	}
+}
+
+// ValidateUpdateMenu enforces MVP-002.4 rules without database access.
+func ValidateUpdateMenu(in UpdateMenuInput) error {
+	fields := map[string]string{}
+	if in.NamaMenu != nil && !ValidateMenuNama(*in.NamaMenu) {
+		fields["nama_menu"] = "must be 3-200 characters"
+	}
+	checkGiziField(in.EnergiKkal, 2000, "energi_kkal", fields)
+	checkGiziField(in.ProteinG, 300, "protein_g", fields)
+	checkGiziField(in.KarbohidratG, 300, "karbohidrat_g", fields)
+	checkGiziField(in.LemakG, 300, "lemak_g", fields)
+	if in.TargetPorsi != nil && *in.TargetPorsi <= 0 {
+		fields["target_porsi"] = "must be greater than 0"
+	}
+	if in.Items != nil {
+		items := *in.Items
+		if len(items) == 0 {
+			fields["bahan"] = "at least 1 item is required"
+		} else {
+			seen := map[int64]bool{}
+			dup := false
+			for _, it := range items {
+				if seen[it.BahanID] {
+					dup = true
+					continue
+				}
+				seen[it.BahanID] = true
+				if it.BahanID <= 0 {
+					fields["bahan"] = "invalid bahan_id"
+					continue
+				}
+				if it.GramPerPorsi <= 0 || it.GramPerPorsi > 1000 {
+					fields["bahan"] = "gram_per_porsi must be > 0 and max 1000"
+					continue
+				}
+				if !ValidDecimalPlaces(it.GramPerPorsi) {
+					fields["bahan"] = "gram_per_porsi max 2 decimal places"
+					continue
+				}
+			}
+			if dup {
+				return &ValidationError{Fields: map[string]string{"bahan": "duplicate bahan_id in composition"}}
+			}
 		}
 	}
 	if len(fields) > 0 {

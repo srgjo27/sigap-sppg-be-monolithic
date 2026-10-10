@@ -10,6 +10,8 @@ var (
 	ErrMenuNotFound   = errors.New("menu not found")
 	ErrBahanInactive  = errors.New("bahan is inactive")
 	ErrDuplicateBahan = errors.New("duplicate bahan in composition")
+	ErrMenuApproved   = errors.New("menu already approved")
+	ErrMenuInUse      = errors.New("menu already used in production")
 	ErrForbidden      = errors.New("forbidden")
 	ErrUnauthorized   = errors.New("unauthorized")
 	ErrNotFound       = errors.New("not found")

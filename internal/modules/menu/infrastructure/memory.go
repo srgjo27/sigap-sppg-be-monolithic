@@ -24,6 +24,8 @@ type MemoryStores struct {
 	capacities      map[int64]*int
 	sppgExists      map[int64]bool
 	recipients      map[int64]int
+	sekolahOwner    map[int64]int64
+	batchMenus      map[int64]bool
 	audits          []authdomain.AuditEntry
 	nextAuditID     int64
 }
@@ -41,6 +43,8 @@ func NewMemoryStores() *MemoryStores {
 		capacities:      map[int64]*int{},
 		sppgExists:      map[int64]bool{},
 		recipients:      map[int64]int{},
+		sekolahOwner:    map[int64]int64{},
+		batchMenus:      map[int64]bool{},
 		nextAuditID:     1,
 	}
 }
@@ -52,6 +56,21 @@ func (m *MemoryStores) SeedSPPG(id int64, capacity *int, recipients int) {
 	m.sppgExists[id] = true
 	m.capacities[id] = capacity
 	m.recipients[id] = recipients
+}
+
+// SeedSekolah registers sekolah -> sppg ownership (pic_sekolah scoping).
+func (m *MemoryStores) SeedSekolah(sekolahID, sppgID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sppgExists[sppgID] = true
+	m.sekolahOwner[sekolahID] = sppgID
+}
+
+// MarkMenuUsed flags a menu as referenced by batch_produksi (tests).
+func (m *MemoryStores) MarkMenuUsed(menuID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.batchMenus[menuID] = true
 }
 
 // SeedBahan inserts a bahan directly (tests).
@@ -242,6 +261,131 @@ func (m *MemoryStores) SumRecipients(ctx context.Context, sppgID int64) (int, er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.recipients[sppgID], nil
+}
+
+// FindOwner implements SekolahProvider for pic_sekolah scoping.
+func (m *MemoryStores) FindOwner(ctx context.Context, sekolahID int64) (bool, int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	owner, ok := m.sekolahOwner[sekolahID]
+	return ok, owner, nil
+}
+
+// FindMenuByID implements MenuRepository.
+func (m *MemoryStores) FindMenuByID(ctx context.Context, id int64) (*domain.Menu, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	menu, ok := m.menus[id]
+	if !ok {
+		return nil, nil
+	}
+	cp := *menu
+	return &cp, nil
+}
+
+func truncDate(t time.Time) time.Time {
+	y, mo, d := t.Date()
+	return time.Date(y, mo, d, 0, 0, 0, 0, time.UTC)
+}
+
+// ListByScope implements MenuRepository ordered by tanggal ASC.
+func (m *MemoryStores) ListByScope(ctx context.Context, sppgID *int64, dari, sampai time.Time, status *string) ([]domain.Menu, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	from, to := truncDate(dari), truncDate(sampai)
+	var out []domain.Menu
+	for _, menu := range m.menus {
+		if sppgID != nil && menu.SPPGID != *sppgID {
+			continue
+		}
+		day := truncDate(menu.Tanggal)
+		if day.Before(from) || day.After(to) {
+			continue
+		}
+		if status != nil && menu.Status != *status {
+			continue
+		}
+		out = append(out, *menu)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Tanggal.Equal(out[j].Tanggal) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Tanggal.Before(out[j].Tanggal)
+	})
+	if out == nil {
+		out = []domain.Menu{}
+	}
+	return out, nil
+}
+
+// ListItems implements MenuRepository.
+func (m *MemoryStores) ListItems(ctx context.Context, menuIDs []int64) (map[int64][]domain.MenuBahan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[int64][]domain.MenuBahan{}
+	for _, id := range menuIDs {
+		items := append([]domain.MenuBahan{}, m.menuItems[id]...)
+		if items == nil {
+			items = []domain.MenuBahan{}
+		}
+		out[id] = items
+	}
+	return out, nil
+}
+
+// UpdateMenu implements MenuRepository atomically.
+func (m *MemoryStores) UpdateMenu(ctx context.Context, menu *domain.Menu, replaceItems *[]domain.MenuBahan) (*domain.Menu, []domain.MenuBahan, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	existing, ok := m.menus[menu.ID]
+	if !ok {
+		return nil, nil, domain.ErrMenuNotFound
+	}
+	_ = existing
+	cp := *menu
+	m.menus[menu.ID] = &cp
+	var stored []domain.MenuBahan
+	if replaceItems != nil {
+		next := make([]domain.MenuBahan, 0, len(*replaceItems))
+		for _, it := range *replaceItems {
+			it.ID = m.nextMenuBahanID
+			m.nextMenuBahanID++
+			it.MenuID = menu.ID
+			next = append(next, it)
+		}
+		m.menuItems[menu.ID] = next
+		stored = append([]domain.MenuBahan{}, next...)
+	} else {
+		stored = append([]domain.MenuBahan{}, m.menuItems[menu.ID]...)
+	}
+	if stored == nil {
+		stored = []domain.MenuBahan{}
+	}
+	out := cp
+	return &out, stored, nil
+}
+
+// DeleteMenu implements MenuRepository with cascade on menu_bahan.
+func (m *MemoryStores) DeleteMenu(ctx context.Context, id int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	menu, ok := m.menus[id]
+	if !ok {
+		return domain.ErrMenuNotFound
+	}
+	delete(m.menuDateIndex, menuDateKey(menu.SPPGID, menu.Tanggal))
+	delete(m.menus, id)
+	delete(m.menuItems, id)
+	delete(m.batchMenus, id)
+	return nil
+}
+
+// IsMenuUsed implements MenuRepository.
+func (m *MemoryStores) IsMenuUsed(ctx context.Context, menuID int64) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.batchMenus[menuID], nil
 }
 
 // Append implements AuditRepository.

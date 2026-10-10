@@ -85,10 +85,11 @@ type MenuGiziResponse struct {
 }
 
 // MenuBahanResponse is one composition item in responses.
+// GramPerPorsi is omitted when zero so pic_sekolah views stay gram-free.
 type MenuBahanResponse struct {
 	BahanID      int64   `json:"bahan_id"`
 	Nama         string  `json:"nama"`
-	GramPerPorsi float64 `json:"gram_per_porsi"`
+	GramPerPorsi float64 `json:"gram_per_porsi,omitempty"`
 }
 
 // CreateMenuResponse is the MVP-002.2 success payload.
@@ -124,6 +125,101 @@ func toCreateMenuResponse(res *application.CreateMenuResult) CreateMenuResponse 
 		warnings = []string{}
 	}
 	return CreateMenuResponse{
+		ID: res.Menu.ID, Tanggal: res.Menu.Tanggal.Format("2006-01-02"), NamaMenu: res.Menu.NamaMenu,
+		Gizi:        MenuGiziResponse{EnergiKkal: res.Menu.EnergiKkal, ProteinG: res.Menu.ProteinG, KarbohidratG: res.Menu.KarbohidratG, LemakG: res.Menu.LemakG},
+		TargetPorsi: res.Menu.TargetPorsi, Status: res.Menu.Status, Bahan: items,
+		DibuatOleh: res.Menu.DibuatOleh, CreatedAt: res.Menu.CreatedAt, Warnings: warnings,
+	}
+}
+
+// MenuListItemResponse is one row in GET /menus.
+type MenuListItemResponse struct {
+	ID          int64            `json:"id"`
+	Tanggal     string           `json:"tanggal"`
+	NamaMenu    string           `json:"nama_menu"`
+	Gizi        MenuGiziResponse `json:"gizi"`
+	TargetPorsi int              `json:"target_porsi"`
+	Status      string           `json:"status"`
+}
+
+// MenuListMeta carries range info plus empty dates.
+type MenuListMeta struct {
+	Dari          string   `json:"dari"`
+	Sampai        string   `json:"sampai"`
+	Total         int      `json:"total"`
+	TanggalKosong []string `json:"tanggal_kosong"`
+}
+
+// MenuListResponse is the MVP-002.3 list payload.
+type MenuListResponse struct {
+	Data []MenuListItemResponse `json:"data"`
+	Meta MenuListMeta           `json:"meta"`
+}
+
+// MenuDetailResponse is the MVP-002.3 detail payload.
+type MenuDetailResponse struct {
+	ID            int64               `json:"id"`
+	Tanggal       string              `json:"tanggal"`
+	NamaMenu      string              `json:"nama_menu"`
+	Gizi          MenuGiziResponse    `json:"gizi"`
+	TargetPorsi   int                 `json:"target_porsi"`
+	Status        string              `json:"status"`
+	Bahan         []MenuBahanResponse `json:"bahan"`
+	DibuatOleh    int64               `json:"dibuat_oleh"`
+	DisetujuiOleh *int64              `json:"disetujui_oleh,omitempty"`
+	DisetujuiAt   *time.Time          `json:"disetujui_at,omitempty"`
+	CreatedAt     time.Time           `json:"created_at"`
+}
+
+// UpdateMenuBahanRequest is one replacement composition item.
+type UpdateMenuBahanRequest struct {
+	BahanID      int64    `json:"bahan_id"`
+	GramPerPorsi *float64 `json:"gram_per_porsi"`
+}
+
+// UpdateMenuResponse reuses the create shape (updated menu + warnings).
+type UpdateMenuResponse = CreateMenuResponse
+
+func toMenuListResponse(res *application.MenuListResult, dari, sampai string) MenuListResponse {
+	data := make([]MenuListItemResponse, 0, len(res.Items))
+	for _, m := range res.Items {
+		data = append(data, MenuListItemResponse{
+			ID: m.ID, Tanggal: m.Tanggal.Format("2006-01-02"), NamaMenu: m.NamaMenu,
+			Gizi:        MenuGiziResponse{EnergiKkal: m.EnergiKkal, ProteinG: m.ProteinG, KarbohidratG: m.KarbohidratG, LemakG: m.LemakG},
+			TargetPorsi: m.TargetPorsi, Status: m.Status,
+		})
+	}
+	missing := res.Missing
+	if missing == nil {
+		missing = []string{}
+	}
+	return MenuListResponse{Data: data, Meta: MenuListMeta{Dari: dari, Sampai: sampai, Total: res.Total, TanggalKosong: missing}}
+}
+
+func toMenuDetailResponse(det *application.MenuDetail) MenuDetailResponse {
+	items := make([]MenuBahanResponse, 0, len(det.Items))
+	for _, it := range det.Items {
+		items = append(items, MenuBahanResponse{BahanID: it.BahanID, Nama: it.BahanNama, GramPerPorsi: it.GramPerPorsi})
+	}
+	return MenuDetailResponse{
+		ID: det.Menu.ID, Tanggal: det.Menu.Tanggal.Format("2006-01-02"), NamaMenu: det.Menu.NamaMenu,
+		Gizi:        MenuGiziResponse{EnergiKkal: det.Menu.EnergiKkal, ProteinG: det.Menu.ProteinG, KarbohidratG: det.Menu.KarbohidratG, LemakG: det.Menu.LemakG},
+		TargetPorsi: det.Menu.TargetPorsi, Status: det.Menu.Status, Bahan: items,
+		DibuatOleh: det.Menu.DibuatOleh, DisetujuiOleh: det.Menu.DisetujuiOleh, DisetujuiAt: det.Menu.DisetujuiAt,
+		CreatedAt: det.Menu.CreatedAt,
+	}
+}
+
+func toUpdateMenuResponse(res *application.UpdateMenuResult) UpdateMenuResponse {
+	items := make([]MenuBahanResponse, 0, len(res.Items))
+	for _, it := range res.Items {
+		items = append(items, MenuBahanResponse{BahanID: it.BahanID, Nama: it.BahanNama, GramPerPorsi: it.GramPerPorsi})
+	}
+	warnings := res.Warnings
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return UpdateMenuResponse{
 		ID: res.Menu.ID, Tanggal: res.Menu.Tanggal.Format("2006-01-02"), NamaMenu: res.Menu.NamaMenu,
 		Gizi:        MenuGiziResponse{EnergiKkal: res.Menu.EnergiKkal, ProteinG: res.Menu.ProteinG, KarbohidratG: res.Menu.KarbohidratG, LemakG: res.Menu.LemakG},
 		TargetPorsi: res.Menu.TargetPorsi, Status: res.Menu.Status, Bahan: items,

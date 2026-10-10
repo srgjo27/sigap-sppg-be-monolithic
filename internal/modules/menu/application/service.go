@@ -14,7 +14,7 @@ import (
 // Clock abstracts time for tests.
 type Clock func() time.Time
 
-// Service orchestrates MVP-002.1 and MVP-002.2 use cases.
+// Service orchestrates MVP-002.1 through MVP-002.4 use cases.
 type Service struct {
 	bahan   BahanRepository
 	menus   MenuRepository
@@ -311,6 +311,318 @@ func (s *Service) CreateMenu(ctx context.Context, actor *authdomain.Claims, in d
 		warnings = []string{}
 	}
 	return &CreateMenuResult{Menu: created, Items: createdItems, Warnings: warnings}, nil
+}
+
+// --- MVP-002.3 ---
+
+// MenuListResult carries list rows plus empty-date markers.
+type MenuListResult struct {
+	Items   []domain.Menu
+	Total   int
+	Missing []string
+}
+
+// ListMenus implements GET /menus. Every authenticated role may list;
+// scoping follows the MVP-002 matrix.
+func (s *Service) ListMenus(ctx context.Context, actor *authdomain.Claims, filter domain.MenuFilter) (*MenuListResult, error) {
+	if actor == nil {
+		return nil, domain.ErrUnauthorized
+	}
+	if err := domain.ValidateMenuFilter(filter); err != nil {
+		return nil, err
+	}
+	var scope *int64
+	forceApproved := false
+	switch actor.Role {
+	case authdomain.RoleAdmin, authdomain.RolePengawas:
+		scope = filter.SPPGID
+	case authdomain.RolePICsekolah:
+		if actor.SekolahID == nil {
+			return nil, domain.ErrForbidden
+		}
+		found, owner, err := s.sekolah.FindOwner(ctx, *actor.SekolahID)
+		if err != nil {
+			return nil, fmt.Errorf("find sekolah owner: %w", err)
+		}
+		if !found {
+			return nil, domain.ErrNotFound
+		}
+		if filter.SPPGID != nil && *filter.SPPGID != owner {
+			return nil, domain.ErrNotFound
+		}
+		scope = &owner
+		forceApproved = true
+	default:
+		if actor.SPPGID == nil {
+			return nil, domain.ErrForbidden
+		}
+		if filter.SPPGID != nil && *filter.SPPGID != *actor.SPPGID {
+			return nil, domain.ErrNotFound
+		}
+		scope = actor.SPPGID
+	}
+	status := filter.Status
+	if forceApproved {
+		if status != nil && *status != domain.MenuStatusDisetujui {
+			// pic_sekolah never sees non-approved menus: empty result.
+			missing := domain.MissingDates(filter.Dari, filter.Sampai, map[string]bool{})
+			return &MenuListResult{Items: []domain.Menu{}, Missing: missing}, nil
+		}
+		approved := domain.MenuStatusDisetujui
+		status = &approved
+	}
+	items, err := s.menus.ListByScope(ctx, scope, filter.Dari, filter.Sampai, status)
+	if err != nil {
+		return nil, fmt.Errorf("list menus: %w", err)
+	}
+	if actor.Role == authdomain.RolePICsekolah {
+		kept := items[:0]
+		for _, m := range items {
+			if m.Status == domain.MenuStatusDisetujui {
+				kept = append(kept, m)
+			}
+		}
+		items = kept
+	}
+	if items == nil {
+		items = []domain.Menu{}
+	}
+	var missing []string
+	if scope != nil {
+		present := map[string]bool{}
+		for _, m := range items {
+			present[m.Tanggal.Format("2006-01-02")] = true
+		}
+		missing = domain.MissingDates(filter.Dari, filter.Sampai, present)
+	} else {
+		missing = []string{}
+	}
+	return &MenuListResult{Items: items, Total: len(items), Missing: missing}, nil
+}
+
+// MenuDetail carries a menu with its composition.
+type MenuDetail struct {
+	Menu     *domain.Menu
+	Items    []domain.MenuBahan
+	Redacted bool
+}
+
+// GetMenu implements GET /menus/{id}.
+func (s *Service) GetMenu(ctx context.Context, actor *authdomain.Claims, id int64) (*MenuDetail, error) {
+	if actor == nil {
+		return nil, domain.ErrUnauthorized
+	}
+	m, err := s.menus.FindMenuByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("find menu: %w", err)
+	}
+	if m == nil {
+		return nil, domain.ErrMenuNotFound
+	}
+	redacted := false
+	switch actor.Role {
+	case authdomain.RoleAdmin, authdomain.RolePengawas:
+		// Cross-SPPG read allowed.
+	case authdomain.RolePICsekolah:
+		if actor.SekolahID == nil {
+			return nil, domain.ErrNotFound
+		}
+		found, owner, err := s.sekolah.FindOwner(ctx, *actor.SekolahID)
+		if err != nil {
+			return nil, fmt.Errorf("find sekolah owner: %w", err)
+		}
+		if !found || m.SPPGID != owner || m.Status != domain.MenuStatusDisetujui {
+			return nil, domain.ErrMenuNotFound
+		}
+		redacted = true
+	default:
+		if actor.SPPGID == nil || m.SPPGID != *actor.SPPGID {
+			return nil, domain.ErrMenuNotFound
+		}
+	}
+	got, err := s.menus.ListItems(ctx, []int64{m.ID})
+	if err != nil {
+		return nil, fmt.Errorf("list menu items: %w", err)
+	}
+	items := got[m.ID]
+	if items == nil {
+		items = []domain.MenuBahan{}
+	}
+	if redacted {
+		for i := range items {
+			items[i].GramPerPorsi = 0
+		}
+	}
+	return &MenuDetail{Menu: m, Items: items, Redacted: redacted}, nil
+}
+
+// --- MVP-002.4 ---
+
+// UpdateMenuResult carries the updated menu and capacity warnings.
+type UpdateMenuResult struct {
+	Menu     *domain.Menu
+	Items    []domain.MenuBahan
+	Warnings []string
+}
+
+// UpdateMenu implements PATCH /menus/{id}. Only ahli_gizi on own-SPPG drafts.
+func (s *Service) UpdateMenu(ctx context.Context, actor *authdomain.Claims, id int64, in domain.UpdateMenuInput, ip *string) (*UpdateMenuResult, error) {
+	if actor == nil {
+		return nil, domain.ErrUnauthorized
+	}
+	if actor.Role != authdomain.RoleAhliGizi {
+		return nil, domain.ErrForbidden
+	}
+	if actor.SPPGID == nil {
+		return nil, domain.ErrForbidden
+	}
+	if err := domain.ValidateUpdateMenu(in); err != nil {
+		return nil, err
+	}
+	current, err := s.menus.FindMenuByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("find menu: %w", err)
+	}
+	if current == nil || current.SPPGID != *actor.SPPGID {
+		return nil, domain.ErrMenuNotFound
+	}
+	if current.Status != domain.MenuStatusDraf {
+		return nil, domain.ErrMenuApproved
+	}
+	used, err := s.menus.IsMenuUsed(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("check menu usage: %w", err)
+	}
+	if used {
+		return nil, domain.ErrMenuInUse
+	}
+	oldSnap := menuSnapshot(current)
+	if in.NamaMenu != nil {
+		current.NamaMenu = strings.TrimSpace(*in.NamaMenu)
+	}
+	if in.EnergiKkal != nil {
+		current.EnergiKkal = *in.EnergiKkal
+	}
+	if in.ProteinG != nil {
+		current.ProteinG = *in.ProteinG
+	}
+	if in.KarbohidratG != nil {
+		current.KarbohidratG = *in.KarbohidratG
+	}
+	if in.LemakG != nil {
+		current.LemakG = *in.LemakG
+	}
+	if in.TargetPorsi != nil {
+		current.TargetPorsi = *in.TargetPorsi
+	}
+	if in.ClearCatatan {
+		current.Catatan = nil
+	} else if in.Catatan != nil {
+		v := *in.Catatan
+		current.Catatan = &v
+	}
+	var replace *[]domain.MenuBahan
+	if in.Items != nil {
+		resolved := make([]domain.Bahan, 0, len(*in.Items))
+		for _, it := range *in.Items {
+			b, err := s.bahan.FindByID(ctx, it.BahanID)
+			if err != nil {
+				return nil, fmt.Errorf("find bahan: %w", err)
+			}
+			if b == nil {
+				return nil, domain.ErrBahanNotFound
+			}
+			if !b.Aktif {
+				return nil, domain.ErrBahanInactive
+			}
+			resolved = append(resolved, *b)
+		}
+		next := make([]domain.MenuBahan, 0, len(*in.Items))
+		for i, it := range *in.Items {
+			next = append(next, domain.MenuBahan{MenuID: current.ID, BahanID: it.BahanID, BahanNama: resolved[i].Nama, GramPerPorsi: it.GramPerPorsi})
+		}
+		replace = &next
+	}
+	var warnings []string
+	if capPtr, found, err := s.sppg.GetCapacity(ctx, *actor.SPPGID); err != nil {
+		return nil, fmt.Errorf("get sppg capacity: %w", err)
+	} else if found && capPtr != nil && current.TargetPorsi > *capPtr {
+		warnings = append(warnings, fmt.Sprintf("target_porsi %d exceeds sppg capacity %d", current.TargetPorsi, *capPtr))
+	}
+	now := s.clock()
+	current.UpdatedAt = now
+	updated, stored, err := s.menus.UpdateMenu(ctx, current, replace)
+	if err != nil {
+		return nil, fmt.Errorf("update menu: %w", err)
+	}
+	_ = s.audits.Append(ctx, &authdomain.AuditEntry{
+		UserID:    &actor.UserID,
+		Aksi:      authdomain.AuditUpdate,
+		Tabel:     "menu",
+		RecordID:  &updated.ID,
+		DataLama:  strPtr(mustJSON(oldSnap)),
+		DataBaru:  strPtr(mustJSON(menuSnapshot(updated))),
+		IPAddress: ip,
+		CreatedAt: now,
+	})
+	if warnings == nil {
+		warnings = []string{}
+	}
+	return &UpdateMenuResult{Menu: updated, Items: stored, Warnings: warnings}, nil
+}
+
+// DeleteMenu implements DELETE /menus/{id}. Only ahli_gizi on own-SPPG drafts.
+func (s *Service) DeleteMenu(ctx context.Context, actor *authdomain.Claims, id int64, ip *string) error {
+	if actor == nil {
+		return domain.ErrUnauthorized
+	}
+	if actor.Role != authdomain.RoleAhliGizi {
+		return domain.ErrForbidden
+	}
+	if actor.SPPGID == nil {
+		return domain.ErrForbidden
+	}
+	current, err := s.menus.FindMenuByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("find menu: %w", err)
+	}
+	if current == nil || current.SPPGID != *actor.SPPGID {
+		return domain.ErrMenuNotFound
+	}
+	if current.Status != domain.MenuStatusDraf {
+		return domain.ErrMenuApproved
+	}
+	used, err := s.menus.IsMenuUsed(ctx, id)
+	if err != nil {
+		return fmt.Errorf("check menu usage: %w", err)
+	}
+	if used {
+		return domain.ErrMenuInUse
+	}
+	if err := s.menus.DeleteMenu(ctx, id); err != nil {
+		return fmt.Errorf("delete menu: %w", err)
+	}
+	now := s.clock()
+	_ = s.audits.Append(ctx, &authdomain.AuditEntry{
+		UserID:    &actor.UserID,
+		Aksi:      authdomain.AuditUpdate,
+		Tabel:     "menu",
+		RecordID:  &id,
+		DataLama:  strPtr(mustJSON(menuSnapshot(current))),
+		DataBaru:  strPtr(mustJSON(map[string]any{"deleted": true})),
+		IPAddress: ip,
+		CreatedAt: now,
+	})
+	return nil
+}
+
+func menuSnapshot(m *domain.Menu) map[string]any {
+	return map[string]any{
+		"tanggal": m.Tanggal.Format("2006-01-02"), "nama_menu": m.NamaMenu,
+		"energi_kkal": m.EnergiKkal, "protein_g": m.ProteinG,
+		"karbohidrat_g": m.KarbohidratG, "lemak_g": m.LemakG,
+		"target_porsi": m.TargetPorsi, "status": m.Status,
+	}
 }
 
 func strPtr(s string) *string { return &s }

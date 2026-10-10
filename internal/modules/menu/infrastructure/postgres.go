@@ -296,6 +296,177 @@ func (p *Postgres) SumRecipients(ctx context.Context, sppgID int64) (int, error)
 	return int(sum.Int64), nil
 }
 
+// FindOwner returns sekolah ownership for pic_sekolah scoping.
+func (p *Postgres) FindOwner(ctx context.Context, sekolahID int64) (bool, int64, error) {
+	var sppgID int64
+	if err := p.Pool.QueryRow(ctx, `SELECT sppg_id FROM sekolah WHERE id=$1`, sekolahID).Scan(&sppgID); err != nil {
+		if isNoRows(err) {
+			return false, 0, nil
+		}
+		return false, 0, fmt.Errorf("find sekolah owner: %w", err)
+	}
+	return true, sppgID, nil
+}
+
+// FindMenuByID looks up a menu.
+func (p *Postgres) FindMenuByID(ctx context.Context, id int64) (*domain.Menu, error) {
+	const q = `SELECT id, sppg_id, tanggal, nama_menu, energi_kkal, protein_g, karbohidrat_g, lemak_g, target_porsi, catatan, dibuat_oleh, status, disetujui_oleh, disetujui_at, created_at, updated_at FROM menu WHERE id=$1 LIMIT 1`
+	row := p.Pool.QueryRow(ctx, q, id)
+	m, err := scanMenu(row)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find menu: %w", err)
+	}
+	return m, nil
+}
+
+// ListByScope returns menus ordered by tanggal ASC.
+func (p *Postgres) ListByScope(ctx context.Context, sppgID *int64, dari, sampai time.Time, status *string) ([]domain.Menu, error) {
+	const q = `SELECT id, sppg_id, tanggal, nama_menu, energi_kkal, protein_g, karbohidrat_g, lemak_g, target_porsi, catatan, dibuat_oleh, status, disetujui_oleh, disetujui_at, created_at, updated_at
+		FROM menu WHERE ($1::bigint IS NULL OR sppg_id=$1) AND tanggal >= $2 AND tanggal <= $3 AND ($4::text IS NULL OR status=$4)
+		ORDER BY tanggal ASC, id ASC`
+	var statusVal any
+	if status != nil {
+		statusVal = *status
+	}
+	rows, err := p.Pool.Query(ctx, q, nullableInt(sppgID), dari.Format("2006-01-02"), sampai.Format("2006-01-02"), statusVal)
+	if err != nil {
+		return nil, fmt.Errorf("list menus: %w", err)
+	}
+	defer rows.Close()
+	var out []domain.Menu
+	for rows.Next() {
+		m, err := scanMenu(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan menu: %w", err)
+		}
+		out = append(out, *m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows menus: %w", err)
+	}
+	if out == nil {
+		out = []domain.Menu{}
+	}
+	return out, nil
+}
+
+// ListItems returns composition keyed by menu id.
+func (p *Postgres) ListItems(ctx context.Context, menuIDs []int64) (map[int64][]domain.MenuBahan, error) {
+	out := map[int64][]domain.MenuBahan{}
+	for _, id := range menuIDs {
+		out[id] = []domain.MenuBahan{}
+	}
+	if len(menuIDs) == 0 {
+		return out, nil
+	}
+	const q = `SELECT mb.id, mb.menu_id, mb.bahan_id, b.nama, mb.gram_per_porsi FROM menu_bahan mb JOIN bahan b ON b.id=mb.bahan_id WHERE mb.menu_id = ANY($1) ORDER BY mb.id ASC`
+	rows, err := p.Pool.Query(ctx, q, menuIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list menu items: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var it domain.MenuBahan
+		if err := rows.Scan(&it.ID, &it.MenuID, &it.BahanID, &it.BahanNama, &it.GramPerPorsi); err != nil {
+			return nil, fmt.Errorf("scan menu item: %w", err)
+		}
+		out[it.MenuID] = append(out[it.MenuID], it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows menu items: %w", err)
+	}
+	return out, nil
+}
+
+// UpdateMenu persists menu fields and optionally replaces composition atomically.
+func (p *Postgres) UpdateMenu(ctx context.Context, menu *domain.Menu, replaceItems *[]domain.MenuBahan) (*domain.Menu, []domain.MenuBahan, error) {
+	tx, err := p.Pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	const q = `UPDATE menu SET nama_menu=$2, energi_kkal=$3, protein_g=$4, karbohidrat_g=$5, lemak_g=$6, target_porsi=$7, catatan=$8, updated_at=now()
+		WHERE id=$1 RETURNING id, sppg_id, tanggal, nama_menu, energi_kkal, protein_g, karbohidrat_g, lemak_g, target_porsi, catatan, dibuat_oleh, status, disetujui_oleh, disetujui_at, created_at, updated_at`
+	row := tx.QueryRow(ctx, q, menu.ID, menu.NamaMenu, menu.EnergiKkal, menu.ProteinG, menu.KarbohidratG, menu.LemakG, menu.TargetPorsi, nullableStr(menu.Catatan))
+	updated, err := scanMenu(row)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, nil, domain.ErrMenuNotFound
+		}
+		return nil, nil, fmt.Errorf("update menu: %w", err)
+	}
+	var stored []domain.MenuBahan
+	if replaceItems != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM menu_bahan WHERE menu_id=$1`, menu.ID); err != nil {
+			return nil, nil, fmt.Errorf("replace menu_bahan: %w", err)
+		}
+		stored = make([]domain.MenuBahan, 0, len(*replaceItems))
+		for _, it := range *replaceItems {
+			var id int64
+			var nama string
+			const iq = `INSERT INTO menu_bahan (menu_id, bahan_id, gram_per_porsi) VALUES ($1,$2,$3) RETURNING id`
+			if err := tx.QueryRow(ctx, iq, menu.ID, it.BahanID, it.GramPerPorsi).Scan(&id); err != nil {
+				if isUniqueViolation(err) {
+					return nil, nil, domain.ErrDuplicateBahan
+				}
+				return nil, nil, fmt.Errorf("insert menu_bahan: %w", err)
+			}
+			if err := tx.QueryRow(ctx, `SELECT nama FROM bahan WHERE id=$1`, it.BahanID).Scan(&nama); err != nil {
+				return nil, nil, fmt.Errorf("resolve bahan nama: %w", err)
+			}
+			stored = append(stored, domain.MenuBahan{ID: id, MenuID: menu.ID, BahanID: it.BahanID, BahanNama: nama, GramPerPorsi: it.GramPerPorsi})
+		}
+	} else {
+		const iq = `SELECT mb.id, mb.menu_id, mb.bahan_id, b.nama, mb.gram_per_porsi FROM menu_bahan mb JOIN bahan b ON b.id=mb.bahan_id WHERE mb.menu_id=$1 ORDER BY mb.id ASC`
+		rows, err := tx.Query(ctx, iq, menu.ID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("list menu items: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var it domain.MenuBahan
+			if err := rows.Scan(&it.ID, &it.MenuID, &it.BahanID, &it.BahanNama, &it.GramPerPorsi); err != nil {
+				return nil, nil, fmt.Errorf("scan menu item: %w", err)
+			}
+			stored = append(stored, it)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, nil, fmt.Errorf("rows menu items: %w", err)
+		}
+	}
+	if stored == nil {
+		stored = []domain.MenuBahan{}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, fmt.Errorf("commit menu: %w", err)
+	}
+	return updated, stored, nil
+}
+
+// DeleteMenu removes a menu; menu_bahan cascades.
+func (p *Postgres) DeleteMenu(ctx context.Context, id int64) error {
+	ct, err := p.Pool.Exec(ctx, `DELETE FROM menu WHERE id=$1`, id)
+	if err != nil {
+		return fmt.Errorf("delete menu: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return domain.ErrMenuNotFound
+	}
+	return nil
+}
+
+// IsMenuUsed reports whether batch_produksi references the menu.
+func (p *Postgres) IsMenuUsed(ctx context.Context, menuID int64) (bool, error) {
+	var exists bool
+	if err := p.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM batch_produksi WHERE menu_id=$1)`, menuID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check menu usage: %w", err)
+	}
+	return exists, nil
+}
+
 // Append writes an audit entry.
 func (p *Postgres) Append(ctx context.Context, e *authdomain.AuditEntry) error {
 	const q = `INSERT INTO audit_log (user_id, aksi, tabel, record_id, data_lama, data_baru, ip_address)
