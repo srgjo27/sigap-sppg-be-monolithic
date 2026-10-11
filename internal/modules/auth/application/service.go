@@ -742,6 +742,155 @@ func (s *Service) LogDenial(ctx context.Context, userID *int64, reason string, i
 	s.deny(ctx, userID, reason, ip)
 }
 
+// --- MVP-002.8 ---
+
+// UserListView pairs a user with resolved names and derived lock status.
+// Password hashes, tokens, and failure counters are never exposed.
+type UserListView struct {
+	User     *domain.User
+	SPPG     *domain.SPPGInfo
+	Sekolah  *domain.SekolahInfo
+	Terkunci bool
+}
+
+// UserDetailView extends the list view with lock expiry and session count.
+type UserDetailView struct {
+	UserListView
+	JumlahSesiAktif int
+}
+
+// ListUsers implements GET /users (MVP-002.8). Only admin and kepala_sppg;
+// kepala_sppg sees its own SPPG without admin/pengawas accounts.
+// Reads are not audited; denials go through deny (MVP-001.8).
+func (s *Service) ListUsers(ctx context.Context, actor *domain.Claims, filter domain.UserFilter) ([]UserListView, int, error) {
+	if actor == nil {
+		return nil, 0, domain.ErrUnauthorized
+	}
+	if actor.Role != domain.RoleAdmin && actor.Role != domain.RoleKepalaSPPG {
+		s.deny(ctx, &actor.UserID, "users: role not allowed", nil)
+		return nil, 0, domain.ErrForbidden
+	}
+	filter.Normalize()
+	if err := filter.Validate(); err != nil {
+		return nil, 0, err
+	}
+	scope := domain.UserScope{}
+	if actor.Role == domain.RoleKepalaSPPG {
+		if actor.SPPGID == nil {
+			s.deny(ctx, &actor.UserID, "users: missing sppg scope", nil)
+			return nil, 0, domain.ErrForbidden
+		}
+		scope.SPPGID = actor.SPPGID
+		scope.ExcludePrivileged = true
+		// A kepala_sppg query filter on sppg_id is always ignored.
+		filter.SPPGID = nil
+		filter.NullSPPG = false
+	}
+	if filter.SekolahID != nil {
+		found, owner, err := s.sekolah.FindOwner(ctx, *filter.SekolahID)
+		if err != nil {
+			return nil, 0, fmt.Errorf("check sekolah: %w", err)
+		}
+		if !found {
+			return nil, 0, domain.ErrSekolahNotFound
+		}
+		// The sekolah must sit inside the accessible scope; otherwise the
+		// filter can match nothing.
+		effective := filter.SPPGID
+		if scope.SPPGID != nil {
+			effective = scope.SPPGID
+		}
+		if effective != nil && owner != *effective {
+			return []UserListView{}, 0, nil
+		}
+	}
+	users, total, err := s.users.ListUsers(ctx, filter, scope)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list users: %w", err)
+	}
+	now := s.clock()
+	views := make([]UserListView, 0, len(users))
+	sppgCache := map[int64]*domain.SPPGInfo{}
+	sekolahCache := map[int64]*domain.SekolahInfo{}
+	for i := range users {
+		u := users[i]
+		v := UserListView{User: &u, Terkunci: u.IsLocked(now)}
+		if u.SPPGID != nil {
+			info, ok := sppgCache[*u.SPPGID]
+			if !ok {
+				info, err = s.sppg.GetSPPG(ctx, *u.SPPGID)
+				if err != nil {
+					return nil, 0, fmt.Errorf("get sppg: %w", err)
+				}
+				sppgCache[*u.SPPGID] = info
+			}
+			v.SPPG = info
+		}
+		if u.SekolahID != nil {
+			sinfo, ok := sekolahCache[*u.SekolahID]
+			if !ok {
+				sinfo, err = s.sekolah.GetSekolah(ctx, *u.SekolahID)
+				if err != nil {
+					return nil, 0, fmt.Errorf("get sekolah: %w", err)
+				}
+				sekolahCache[*u.SekolahID] = sinfo
+			}
+			v.Sekolah = sinfo
+		}
+		views = append(views, v)
+	}
+	return views, total, nil
+}
+
+// GetUser implements GET /users/{id} (MVP-002.8). Cross-SPPG targets answer
+// 404 (MVP-001.8); admin/pengawas accounts never resolve for kepala_sppg.
+func (s *Service) GetUser(ctx context.Context, actor *domain.Claims, id int64) (*UserDetailView, error) {
+	if actor == nil {
+		return nil, domain.ErrUnauthorized
+	}
+	if actor.Role != domain.RoleAdmin && actor.Role != domain.RoleKepalaSPPG {
+		s.deny(ctx, &actor.UserID, "users: role not allowed", nil)
+		return nil, domain.ErrForbidden
+	}
+	target, err := s.users.FindByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("find user: %w", err)
+	}
+	if target == nil {
+		return nil, domain.ErrNotFound
+	}
+	if actor.Role == domain.RoleKepalaSPPG {
+		if domain.KepalaManagedForbidden(target.Peran) {
+			return nil, domain.ErrNotFound
+		}
+		if actor.SPPGID == nil || target.SPPGID == nil || *target.SPPGID != *actor.SPPGID {
+			return nil, domain.ErrNotFound
+		}
+	}
+	now := s.clock()
+	view := &UserDetailView{UserListView: UserListView{User: target, Terkunci: target.IsLocked(now)}}
+	if target.SPPGID != nil {
+		info, err := s.sppg.GetSPPG(ctx, *target.SPPGID)
+		if err != nil {
+			return nil, fmt.Errorf("get sppg: %w", err)
+		}
+		view.SPPG = info
+	}
+	if target.SekolahID != nil {
+		sinfo, err := s.sekolah.GetSekolah(ctx, *target.SekolahID)
+		if err != nil {
+			return nil, fmt.Errorf("get sekolah: %w", err)
+		}
+		view.Sekolah = sinfo
+	}
+	count, err := s.refresh.CountActiveSessions(ctx, target.ID, now)
+	if err != nil {
+		return nil, fmt.Errorf("count sessions: %w", err)
+	}
+	view.JumlahSesiAktif = count
+	return view, nil
+}
+
 func (s *Service) deny(ctx context.Context, userID *int64, reason string, ip *string) {
 	if userID == nil {
 		return

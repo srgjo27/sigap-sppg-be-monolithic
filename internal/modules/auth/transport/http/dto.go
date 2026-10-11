@@ -220,3 +220,70 @@ func toAuditItem(v application.AuditLogView) AuditLogItem {
 	}
 	return item
 }
+
+// UserListItem is one row in GET /users (MVP-002.8): display columns only
+// (nama, email, peran, penempatan as SPPG name, status, last log).
+// Secrets (password_hash, tokens, failure counters) are never included.
+type UserListItem struct {
+	Nama        string     `json:"nama"`
+	Email       string     `json:"email"`
+	Peran       string     `json:"peran"`
+	Penempatan  *string    `json:"penempatan"`
+	Status      bool       `json:"status"`
+	LogTerakhir *time.Time `json:"log_terakhir"`
+}
+
+// UserListResponse wraps paginated user rows.
+type UserListResponse struct {
+	Data []UserListItem `json:"data"`
+	Meta PageMeta       `json:"meta"`
+}
+
+// UserDetailResponse is GET /users/{id} (MVP-002.8).
+type UserDetailResponse struct {
+	ID                 int64      `json:"id"`
+	Nama               string     `json:"nama"`
+	Email              string     `json:"email"`
+	NoHP               *string    `json:"no_hp,omitempty"`
+	Peran              string     `json:"peran"`
+	SPPG               *NamedRef  `json:"sppg,omitempty"`
+	Sekolah            *NamedRef  `json:"sekolah,omitempty"`
+	Aktif              bool       `json:"aktif"`
+	Terkunci           bool       `json:"terkunci"`
+	TerkunciSampai     *time.Time `json:"terkunci_sampai,omitempty"`
+	WajibGantiPassword bool       `json:"wajib_ganti_password"`
+	LastLoginAt        *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	JumlahSesiAktif    int        `json:"jumlah_sesi_aktif"`
+}
+
+func toUserListItem(v application.UserListView) UserListItem {
+	u := v.User
+	item := UserListItem{
+		Nama: u.Nama, Email: u.Email, Peran: string(u.Peran),
+		Status: u.Aktif, LogTerakhir: u.LastLoginAt,
+	}
+	if v.SPPG != nil {
+		nama := v.SPPG.Nama
+		item.Penempatan = &nama
+	}
+	return item
+}
+
+func toUserDetailResponse(v *application.UserDetailView) UserDetailResponse {
+	u := v.User
+	res := UserDetailResponse{
+		ID: u.ID, Nama: u.Nama, Email: u.Email, NoHP: u.NoHP, Peran: string(u.Peran),
+		Aktif: u.Aktif, Terkunci: v.Terkunci, TerkunciSampai: u.TerkunciSampai,
+		WajibGantiPassword: u.WajibGantiPassword, LastLoginAt: u.LastLoginAt,
+		CreatedAt: u.CreatedAt, UpdatedAt: u.UpdatedAt, JumlahSesiAktif: v.JumlahSesiAktif,
+	}
+	if v.SPPG != nil {
+		res.SPPG = &NamedRef{ID: v.SPPG.ID, Nama: v.SPPG.Nama}
+	}
+	if v.Sekolah != nil {
+		res.Sekolah = &NamedRef{ID: v.Sekolah.ID, Nama: v.Sekolah.Nama}
+	}
+	return res
+}

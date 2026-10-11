@@ -159,6 +159,84 @@ func (p *Postgres) CountActiveKepala(ctx context.Context, sppgID int64, excludeI
 	return n, nil
 }
 
+// userListOrder maps an allowlisted sort key to ORDER BY (MVP-002.8).
+func userListOrder(sort string) string {
+	switch sort {
+	case domain.UserSortMinusCreated:
+		return `created_at DESC, id ASC`
+	case domain.UserSortMinusLogin:
+		return `last_login_at DESC NULLS LAST, id ASC`
+	default:
+		return `nama ASC, id ASC`
+	}
+}
+
+// ListUsers returns paginated users for GET /users (MVP-002.8).
+func (p *Postgres) ListUsers(ctx context.Context, filter domain.UserFilter, scope domain.UserScope) ([]domain.User, int, error) {
+	filter.Normalize()
+	where := `WHERE ($1::text IS NULL OR lower(nama) LIKE '%'||lower($1)||'%' OR lower(email) LIKE '%'||lower($1)||'%')` +
+		` AND ($2::text[] IS NULL OR peran::text = ANY($2))` +
+		` AND ($3::boolean IS NULL OR aktif = $3)` +
+		` AND ($4::bigint IS NULL OR sppg_id = $4)` +
+		` AND ($5::boolean IS NOT TRUE OR sppg_id IS NULL)` +
+		` AND ($6::bigint IS NULL OR sekolah_id = $6)` +
+		` AND ($7::bigint IS NULL OR sppg_id = $7)` +
+		` AND ($8::boolean IS NOT TRUE OR (peran <> 'admin' AND peran <> 'pengawas'))`
+	var roles []string
+	if len(filter.Peran) > 0 {
+		roles = make([]string, 0, len(filter.Peran))
+		for _, r := range filter.Peran {
+			roles = append(roles, string(r))
+		}
+	}
+	var rolesParam any
+	if roles != nil {
+		rolesParam = roles
+	}
+	args := []any{
+		nullableStr(filter.Q), rolesParam, filter.Aktif,
+		nullableInt(filter.SPPGID), filter.NullSPPG, nullableInt(filter.SekolahID),
+		nullableInt(scope.SPPGID), scope.ExcludePrivileged,
+	}
+	countQ := `SELECT COUNT(*) FROM users ` + where
+	var total int
+	if err := p.Pool.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count users: %w", err)
+	}
+	listQ := `SELECT ` + userColumns + ` FROM users ` + where +
+		` ORDER BY ` + userListOrder(filter.Sort) + ` LIMIT $9 OFFSET $10`
+	rows, err := p.Pool.Query(ctx, listQ, append(args, filter.Limit, filter.Offset())...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list users: %w", err)
+	}
+	defer rows.Close()
+	var out []domain.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, 0, fmt.Errorf("scan user: %w", err)
+		}
+		out = append(out, *u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("rows users: %w", err)
+	}
+	if out == nil {
+		out = []domain.User{}
+	}
+	return out, total, nil
+}
+
+// CountActiveSessions counts usable refresh tokens (MVP-002.8 detail).
+func (p *Postgres) CountActiveSessions(ctx context.Context, userID int64, now time.Time) (int, error) {
+	const q = `SELECT COUNT(*) FROM refresh_token WHERE user_id=$1 AND revoked_at IS NULL AND expires_at > $2`
+	var n int
+	if err := p.Pool.QueryRow(ctx, q, userID, now).Scan(&n); err != nil {
+		return 0, fmt.Errorf("count sessions: %w", err)
+	}
+	return n, nil
+}
+
 // StoreRefresh inserts a hashed refresh token.
 func (p *Postgres) StoreRefresh(ctx context.Context, t *domain.RefreshToken) (*domain.RefreshToken, error) {
 	const q = `INSERT INTO refresh_token (user_id, token_hash, user_agent, ip_address, expires_at, created_at)

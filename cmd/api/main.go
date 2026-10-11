@@ -11,6 +11,9 @@ import (
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/application"
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/infrastructure"
 	authhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/transport/http"
+	menuapplication "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/menu/application"
+	menuinfrastructure "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/menu/infrastructure"
+	menuhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/menu/transport/http"
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/server"
 )
 
@@ -32,6 +35,13 @@ func main() {
 		auditStore   application.AuditRepository
 		sppgCheck    application.SPPGChecker
 		sekolahCheck application.SekolahChecker
+
+		menuBahan   menuapplication.BahanRepository
+		menuRepo    menuapplication.MenuRepository
+		menuSPPG    menuapplication.SPPGProvider
+		menuSekolah menuapplication.SekolahProvider
+		menuAudit   menuapplication.AuditRepository
+		menuNotifs  menuapplication.NotificationRepository
 	)
 
 	if cfg.DatabaseURL != "" {
@@ -48,6 +58,13 @@ func main() {
 		auditStore = pg
 		sppgCheck = pg
 		sekolahCheck = pg
+		mpg := menuinfrastructure.NewPostgres(pool)
+		menuBahan = mpg
+		menuRepo = mpg
+		menuSPPG = mpg
+		menuSekolah = mpg
+		menuAudit = mpg
+		menuNotifs = mpg
 	} else {
 		log.Println("DATABASE_URL empty; using in-memory auth stores (dev only)")
 		mem := infrastructure.NewMemoryStores()
@@ -56,6 +73,13 @@ func main() {
 		auditStore = mem
 		sppgCheck = mem
 		sekolahCheck = mem
+		mmem := menuinfrastructure.NewMemoryStores()
+		menuBahan = mmem
+		menuRepo = mmem
+		menuSPPG = mmem
+		menuSekolah = mmem
+		menuAudit = mmem
+		menuNotifs = mmem
 	}
 
 	svc := application.New(application.Deps{
@@ -73,9 +97,15 @@ func main() {
 	handler := authhttp.NewHandler(svc)
 	mw := authhttp.NewMiddleware(issuer, svc)
 
+	menuSvc := menuapplication.New(menuapplication.Deps{
+		Bahan: menuBahan, Menus: menuRepo, SPPG: menuSPPG, Sekolah: menuSekolah, Audits: menuAudit, Notifs: menuNotifs,
+	})
+	menuHandler := menuhttp.NewHandler(menuSvc)
+
 	router := server.New(cfg, server.Deps{
 		AuthHandler:    handler,
 		AuthMiddleware: mw,
+		MenuHandler:    menuHandler,
 	})
 
 	if err := router.Run(cfg.HTTPAddr); err != nil {
