@@ -6,7 +6,7 @@ import (
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/domain"
 )
 
-// RegisterRoutes mounts MVP-001 endpoints under /api/v1.
+// RegisterRoutes mounts MVP-001 and MVP-002.8 endpoints under /api/v1.
 // The wajib_ganti_password gate (MVP-001.6) applies to every authenticated
 // endpoint except me, logout, and password.
 func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *Middleware) {
@@ -16,6 +16,8 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *Middleware) {
 	readOnly := mw.PengawasReadOnly()
 
 	rg.POST("/users", mw.Authenticate(), freshPassword, readOnly, manage, h.CreateUser)
+	rg.GET("/users", mw.Authenticate(), freshPassword, readOnly, manage, h.ListUsers)
+	rg.GET("/users/:id", mw.Authenticate(), freshPassword, readOnly, manage, h.GetUser)
 	rg.PATCH("/users/:id", mw.Authenticate(), freshPassword, readOnly, manage, h.UpdateUser)
 
 	auth := rg.Group("/auth")

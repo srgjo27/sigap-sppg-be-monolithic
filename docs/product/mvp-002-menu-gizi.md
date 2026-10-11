@@ -1,6 +1,6 @@
 # MVP-002 Menu & gizi
  
-Spesifikasi modul M2 (P0): master bahan, penyusunan menu harian beserta komposisi dan nilai gizi per porsi, persetujuan menu, dan perhitungan kebutuhan bahan otomatis. Dipecah menjadi 7 endpoint yang masing-masing bisa diuji terpisah. Semua endpoint berprefiks `/api/v1`, dilindungi middleware RBAC dari MVP-001.8, dan memakai tabel `bahan`, `menu`, `menu_bahan`, `sekolah`, `audit_log`.
+Spesifikasi modul M2 (P0): master bahan, penyusunan menu harian beserta komposisi dan nilai gizi per porsi, persetujuan menu, dan perhitungan kebutuhan bahan otomatis. Dipecah menjadi 7 endpoint yang masing-masing bisa diuji terpisah. Semua endpoint berprefiks `/api/v1`, dilindungi middleware RBAC dari MVP-001.8, dan memakai tabel `bahan`, `menu`, `menu_bahan`, `sekolah`, `audit_log`. MVP-002.8 (daftar pengguna) melengkapi kelola user dari MVP-001 dan memakai tabel `users`, `sppg`, `sekolah`, `refresh_token`.
  
 ## Main Feature
  
@@ -17,6 +17,7 @@ Menu harian/mingguan, komposisi gizi per porsi, kebutuhan bahan otomatis dari ju
 | MVP-002.5 | POST /menus/{id}/approve, POST /menus/{id}/revert | Setujui menu atau kembalikan ke draf | kepala\_sppg |
 | MVP-002.6 | GET /menus/{id}/kebutuhan-bahan | Hitung total kebutuhan bahan | ahli\_gizi, akuntan, kepala\_sppg |
 | MVP-002.7 | POST /menus/{id}/copy | Salin menu ke tanggal lain (susun menu mingguan) | ahli\_gizi |
+| MVP-002.8 | GET /users, GET /users/{id} | Daftar dan detail pengguna (pelengkap MVP-001) | admin, kepala\_sppg |
  
 ## Matriks peran
  
@@ -29,6 +30,8 @@ Menu harian/mingguan, komposisi gizi per porsi, kebutuhan bahan otomatis dari ju
 | petugas\_dapur, petugas\_distribusi | Baca | Tidak | Tidak | Menu saja, SPPG sendiri |
 | pic\_sekolah | Tidak | Tidak | Tidak | Menu yang sudah disetujui untuk SPPG yang melayani sekolahnya |
 | pengawas | Baca | Tidak | Tidak | Semua SPPG, baca saja |
+
+Akses daftar pengguna (MVP-002.8): admin melihat semua akun; kepala\_sppg hanya akun di SPPG sendiri tanpa admin dan pengawas; peran lain, termasuk pengawas, tidak punya akses.
 
 ## Tambahan skema
  
@@ -434,5 +437,69 @@ Returns `data[]` menu baru dan `warnings[]`
 - [ ] Conflict on any date rejects the whole request with 409.
 - [ ] Inactive ingredients are skipped and reported.
 - [ ] Data is persisted to PostgreSQL and written to audit\_log.
+- [ ] Unit tests exist.
+- [ ] Integration test exists.
+
+## MVP-002.8 List & detail users
+ 
+### Goal
+ 
+Admin dan kepala SPPG melihat daftar akun yang mereka kelola, mencari pengguna tertentu, dan memeriksa status akun (aktif, terkunci, wajib ganti password, login terakhir) sebelum mengubahnya lewat MVP-001.5. Endpoint ini melengkapi kelola user di MVP-001 (MVP-001.1 dan MVP-001.5) according to docs/product/mvp-001-authentication-role.md.
+ 
+### Actor
+ 
+admin, kepala\_sppg
+ 
+### Input
+ 
+`GET /api/v1/users`
+ 
+- q (opsional; cari di nama atau email, minimal 2 karakter)
+- peran (opsional, bisa lebih dari satu: `peran=petugas_dapur,petugas_distribusi`)
+- aktif (opsional, boolean)
+- sppg\_id (opsional, hanya admin; `sppg_id=null` untuk akun tanpa SPPG, yaitu admin dan pengawas)
+- sekolah\_id (opsional)
+- sort (opsional: `nama`, `-created_at`, `-last_login_at`; default `nama`)
+- page, per\_page (default 1 dan 20, maks 100)
+`GET /api/v1/users/{id}`
+ 
+### Rules
+ 
+- admin melihat semua akun di semua SPPG, termasuk admin dan pengawas
+- kepala\_sppg hanya melihat akun dengan `sppg_id` miliknya; akun admin dan pengawas tidak pernah muncul di hasilnya
+- `sppg_id` di query dari kepala\_sppg diabaikan (selalu SPPG miliknya); detail user milik SPPG lain dijawab 404, sesuai MVP-001.8
+- `sekolah_id` harus milik SPPG yang dapat diakses pengguna
+- pencarian `q` tidak membedakan huruf besar/kecil dan mencocokkan sebagian teks
+- response tidak pernah memuat `password_hash`, refresh token, atau `gagal_login`; status kunci cukup ditampilkan lewat `terkunci` dan `terkunci_sampai`
+- `terkunci = true` bila `terkunci_sampai` > sekarang
+- detail menyertakan `jumlah_sesi_aktif`, yaitu refresh token yang belum dicabut dan belum kedaluwarsa (bukan isi token)
+- endpoint hanya membaca; tidak dicatat di audit\_log kecuali penolakan 403 (MVP-001.8)
+### Success
+ 
+HTTP 200
+ 
+List: `data[]` (nama, email, peran, penempatan, status, log_terakhir) dan `meta` (page, per_page, total)
+ 
+Detail: user lengkap + `terkunci_sampai`, `updated_at`, `jumlah_sesi_aktif`
+ 
+### Failure
+ 
+400: invalid input (mis. peran tidak dikenal, q kurang dari 2 karakter, per\_page lebih dari 100)
+ 
+401: tidak login atau token kedaluwarsa
+ 
+403: peran tidak berhak (termasuk pengawas dan semua peran lain)
+ 
+404: user not found atau milik SPPG lain
+ 
+500: unexpected internal error
+ 
+### Acceptance Criteria
+ 
+- [ ] Filters, search, sorting, and pagination work.
+- [ ] kepala\_sppg never sees users from another SPPG, nor admin or pengawas accounts.
+- [ ] Other roles, including pengawas, receive 403.
+- [ ] Password hash, tokens, and failed-login counter are never returned.
+- [ ] Locked status is derived from terkunci\_sampai.
 - [ ] Unit tests exist.
 - [ ] Integration test exists.

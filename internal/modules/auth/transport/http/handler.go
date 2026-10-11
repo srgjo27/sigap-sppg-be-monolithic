@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -175,6 +176,101 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, UpdateUserResponse{User: toUserResponse(res.User), PasswordSementara: res.TempPassword})
+}
+
+// ListUsers handles GET /users (MVP-002.8).
+func (h *Handler) ListUsers(c *gin.Context) {
+	claims, ok := CurrentUser(c)
+	if !ok {
+		MapError(c, domain.ErrUnauthorized)
+		return
+	}
+	filter := domain.UserFilter{}
+	if v := c.Query("q"); v != "" {
+		filter.Q = &v
+	}
+	if v := c.Query("peran"); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if trimmed := strings.TrimSpace(part); trimmed != "" {
+				filter.Peran = append(filter.Peran, domain.Role(trimmed))
+			}
+		}
+	}
+	if v := c.Query("aktif"); v != "" {
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"aktif": "must be a boolean"}})
+			return
+		}
+		filter.Aktif = &parsed
+	}
+	if v := c.Query("sppg_id"); v != "" {
+		if strings.EqualFold(v, "null") {
+			filter.NullSPPG = true
+		} else {
+			id, err := strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				MapError(c, &domain.ValidationError{Fields: map[string]string{"sppg_id": "must be an integer or null"}})
+				return
+			}
+			filter.SPPGID = &id
+		}
+	}
+	if v := c.Query("sekolah_id"); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"sekolah_id": "must be an integer"}})
+			return
+		}
+		filter.SekolahID = &id
+	}
+	if v := c.Query("sort"); v != "" {
+		filter.Sort = v
+	}
+	if v := c.Query("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			filter.Page = n
+		}
+	}
+	if v := c.Query("per_page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			filter.Limit = n
+		}
+	}
+	views, total, err := h.svc.ListUsers(c.Request.Context(), claims, filter)
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	filter.Normalize()
+	items := make([]UserListItem, 0, len(views))
+	for _, vw := range views {
+		items = append(items, toUserListItem(vw))
+	}
+	c.JSON(http.StatusOK, UserListResponse{
+		Data: items,
+		Meta: PageMeta{Page: filter.Page, PerPage: filter.Limit, Total: total},
+	})
+}
+
+// GetUser handles GET /users/:id (MVP-002.8).
+func (h *Handler) GetUser(c *gin.Context) {
+	claims, ok := CurrentUser(c)
+	if !ok {
+		MapError(c, domain.ErrUnauthorized)
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrNotFound)
+		return
+	}
+	view, err := h.svc.GetUser(c.Request.Context(), claims, id)
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toUserDetailResponse(view))
 }
 
 // ChangePassword handles PUT /auth/password (MVP-001.6).
