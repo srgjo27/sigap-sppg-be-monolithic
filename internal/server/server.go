@@ -19,9 +19,8 @@ type Deps struct {
 
 // New constructs the Gin engine with health and versioned API routes.
 func New(cfg config.Config, deps Deps) *gin.Engine {
-	_ = cfg
 	router := gin.New()
-	router.Use(gin.Logger(), gin.Recovery())
+	router.Use(gin.Logger(), gin.Recovery(), CORS(cfg.CORSAllowedOrigins))
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
