@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -12,12 +13,13 @@ import (
 
 // Config owns process configuration. Secrets come from env, never hardcoded.
 type Config struct {
-	HTTPAddr    string
-	JWTSecret   string
-	DatabaseURL string
-	AccessTTL   time.Duration
-	RefreshTTL  time.Duration
-	BcryptCost  int
+	HTTPAddr           string
+	JWTSecret          string
+	DatabaseURL        string
+	AccessTTL          time.Duration
+	RefreshTTL         time.Duration
+	BcryptCost         int
+	CORSAllowedOrigins []string
 }
 
 // Load reads environment with safe defaults for non-secret values.
@@ -31,12 +33,13 @@ func Load() Config {
 		addr = ":8080"
 	}
 	return Config{
-		HTTPAddr:    addr,
-		JWTSecret:   os.Getenv("JWT_SECRET"),
-		DatabaseURL: firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("DB_URL")),
-		AccessTTL:   parseDuration(os.Getenv("JWT_ACCESS_TTL"), domain.AccessTokenTTL),
-		RefreshTTL:  parseDuration(os.Getenv("JWT_REFRESH_TTL"), domain.RefreshTokenTTL),
-		BcryptCost:  parseInt(os.Getenv("BCRYPT_COST"), 12),
+		HTTPAddr:           addr,
+		JWTSecret:          os.Getenv("JWT_SECRET"),
+		DatabaseURL:        firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("DB_URL")),
+		AccessTTL:          parseDuration(os.Getenv("JWT_ACCESS_TTL"), domain.AccessTokenTTL),
+		RefreshTTL:         parseDuration(os.Getenv("JWT_REFRESH_TTL"), domain.RefreshTokenTTL),
+		BcryptCost:         parseInt(os.Getenv("BCRYPT_COST"), 12),
+		CORSAllowedOrigins: parseCSV(os.Getenv("CORS_ALLOWED_ORIGINS"), []string{"http://localhost:5173"}),
 	}
 }
 
@@ -67,4 +70,19 @@ func parseInt(raw string, fallback int) int {
 		return n
 	}
 	return fallback
+}
+
+// parseCSV splits a comma-separated env value; empty entries are dropped.
+// When nothing remains, the fallback is returned.
+func parseCSV(raw string, fallback []string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return out
 }

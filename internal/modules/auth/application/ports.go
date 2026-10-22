@@ -16,6 +16,8 @@ type UserRepository interface {
 	EmailExists(ctx context.Context, email string, excludeID *int64) (bool, error)
 	// CountActiveKepala counts active kepala_sppg in an SPPG, excluding a user.
 	CountActiveKepala(ctx context.Context, sppgID int64, excludeID *int64) (int, error)
+	// ListUsers returns paginated users for GET /users (MVP-002.8).
+	ListUsers(ctx context.Context, filter domain.UserFilter, scope domain.UserScope) ([]domain.User, int, error)
 }
 
 // RefreshTokenRepository stores hashed refresh tokens.
@@ -28,6 +30,9 @@ type RefreshTokenRepository interface {
 	RevokeAllForUser(ctx context.Context, userID int64, now time.Time) error
 	// RevokeAllExcept revokes every active token except the given hash.
 	RevokeAllExcept(ctx context.Context, userID int64, keepHash string, now time.Time) error
+	// CountActiveSessions counts usable refresh tokens (not revoked, not
+	// expired) for GET /users/{id} (MVP-002.8).
+	CountActiveSessions(ctx context.Context, userID int64, now time.Time) (int, error)
 }
 
 // AuditRepository appends and lists audit entries.

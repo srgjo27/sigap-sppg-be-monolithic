@@ -172,6 +172,104 @@ func (m *MemoryStores) CountActiveKepala(ctx context.Context, sppgID int64, excl
 	return n, nil
 }
 
+// ListUsers implements UserRepository for GET /users (MVP-002.8).
+func (m *MemoryStores) ListUsers(ctx context.Context, filter domain.UserFilter, scope domain.UserScope) ([]domain.User, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	filter.Normalize()
+	roles := map[domain.Role]bool{}
+	for _, r := range filter.Peran {
+		roles[r] = true
+	}
+	var out []domain.User
+	for _, u := range m.users {
+		if scope.SPPGID != nil && (u.SPPGID == nil || *u.SPPGID != *scope.SPPGID) {
+			continue
+		}
+		if scope.ExcludePrivileged && (u.Peran == domain.RoleAdmin || u.Peran == domain.RolePengawas) {
+			continue
+		}
+		if filter.Q != nil && *filter.Q != "" {
+			q := strings.ToLower(*filter.Q)
+			if !strings.Contains(strings.ToLower(u.Nama), q) && !strings.Contains(strings.ToLower(u.Email), q) {
+				continue
+			}
+		}
+		if len(roles) > 0 && !roles[u.Peran] {
+			continue
+		}
+		if filter.Aktif != nil && u.Aktif != *filter.Aktif {
+			continue
+		}
+		if filter.SPPGID != nil && (u.SPPGID == nil || *u.SPPGID != *filter.SPPGID) {
+			continue
+		}
+		if filter.NullSPPG && u.SPPGID != nil {
+			continue
+		}
+		if filter.SekolahID != nil && (u.SekolahID == nil || *u.SekolahID != *filter.SekolahID) {
+			continue
+		}
+		out = append(out, *u)
+	}
+	switch filter.Sort {
+	case domain.UserSortMinusCreated:
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+				return out[i].ID < out[j].ID
+			}
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		})
+	case domain.UserSortMinusLogin:
+		sort.Slice(out, func(i, j int) bool {
+			li, lj := out[i].LastLoginAt, out[j].LastLoginAt
+			if li == nil && lj == nil {
+				return out[i].ID < out[j].ID
+			}
+			if li == nil {
+				return false
+			}
+			if lj == nil {
+				return true
+			}
+			if li.Equal(*lj) {
+				return out[i].ID < out[j].ID
+			}
+			return li.After(*lj)
+		})
+	default:
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].Nama == out[j].Nama {
+				return out[i].ID < out[j].ID
+			}
+			return out[i].Nama < out[j].Nama
+		})
+	}
+	total := len(out)
+	start := filter.Offset()
+	if start >= total {
+		return []domain.User{}, total, nil
+	}
+	end := start + filter.Limit
+	if end > total {
+		end = total
+	}
+	return out[start:end], total, nil
+}
+
+// CountActiveSessions implements RefreshTokenRepository (MVP-002.8 detail).
+func (m *MemoryStores) CountActiveSessions(ctx context.Context, userID int64, now time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for _, t := range m.refresh {
+		if t.UserID == userID && t.Active(now) {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // StoreRefresh implements RefreshTokenRepository.
 func (m *MemoryStores) StoreRefresh(ctx context.Context, t *domain.RefreshToken) (*domain.RefreshToken, error) {
 	m.mu.Lock()

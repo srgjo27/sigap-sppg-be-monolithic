@@ -367,3 +367,13 @@ CREATE INDEX idx_refresh_user ON refresh_token (user_id) WHERE revoked_at IS NUL
 ALTER TABLE users ADD COLUMN gagal_login SMALLINT NOT NULL DEFAULT 0,
                   ADD COLUMN terkunci_sampai TIMESTAMPTZ,
                   ADD COLUMN wajib_ganti_password BOOLEAN NOT NULL DEFAULT true;
+
+ALTER TABLE bahan ADD COLUMN gram_per_satuan NUMERIC(10,2) NOT NULL DEFAULT 1000
+                    CHECK (gram_per_satuan > 0),   -- kg = 1000, butir telur ≈ 60, dll
+                  ADD COLUMN aktif BOOLEAN NOT NULL DEFAULT true;
+
+ALTER TABLE menu ADD COLUMN disetujui_oleh BIGINT REFERENCES users(id),
+                 ADD COLUMN disetujui_at TIMESTAMPTZ,
+                 ADD COLUMN catatan TEXT,
+                 ADD CONSTRAINT chk_menu_approved
+                   CHECK (status <> 'disetujui' OR disetujui_at IS NOT NULL);
