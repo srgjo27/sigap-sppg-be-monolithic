@@ -14,6 +14,9 @@ import (
 	menuapplication "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/menu/application"
 	menuinfrastructure "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/menu/infrastructure"
 	menuhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/menu/transport/http"
+	pengadaanapplication "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/pengadaan/application"
+	pengadaaninfrastructure "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/pengadaan/infrastructure"
+	pengadaanhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/pengadaan/transport/http"
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/server"
 )
 
@@ -42,6 +45,14 @@ func main() {
 		menuSekolah menuapplication.SekolahProvider
 		menuAudit   menuapplication.AuditRepository
 		menuNotifs  menuapplication.NotificationRepository
+
+		pengadaanPemasok pengadaanapplication.PemasokRepository
+		pengadaanBahan   pengadaanapplication.BahanRepository
+		pengadaanMenus   pengadaanapplication.MenuRepository
+		pengadaanPO      pengadaanapplication.PurchaseOrderRepository
+		pengadaanSPPG    pengadaanapplication.SPPGProvider
+		pengadaanAudit   pengadaanapplication.AuditRepository
+		pengadaanNotifs  pengadaanapplication.NotificationRepository
 	)
 
 	if cfg.DatabaseURL != "" {
@@ -65,6 +76,13 @@ func main() {
 		menuSekolah = mpg
 		menuAudit = mpg
 		menuNotifs = mpg
+		pengadaanPemasok = pengadaaninfrastructure.NewPemasokPostgres(pool)
+		pengadaanBahan = pengadaaninfrastructure.NewBahanPostgres(pool)
+		pengadaanMenus = pengadaaninfrastructure.NewMenuPostgres(pool)
+		pengadaanPO = pengadaaninfrastructure.NewPurchaseOrderPostgres(pool)
+		pengadaanSPPG = pengadaaninfrastructure.NewSPPGPostgres(pool)
+		pengadaanAudit = pengadaaninfrastructure.NewAuditPostgres(pool)
+		pengadaanNotifs = pengadaaninfrastructure.NewNotificationPostgres(pool)
 	} else {
 		log.Println("DATABASE_URL empty; using in-memory auth stores (dev only)")
 		mem := infrastructure.NewMemoryStores()
@@ -102,10 +120,17 @@ func main() {
 	})
 	menuHandler := menuhttp.NewHandler(menuSvc)
 
+	pengadaanSvc := pengadaanapplication.New(pengadaanapplication.Deps{
+		Pemasok: pengadaanPemasok, Bahan: pengadaanBahan, Menus: pengadaanMenus, PO: pengadaanPO,
+		SPPG: pengadaanSPPG, Audits: pengadaanAudit, Notifs: pengadaanNotifs,
+	})
+	pengadaanHandler := pengadaanhttp.NewHandler(pengadaanSvc)
+
 	router := server.New(cfg, server.Deps{
-		AuthHandler:    handler,
-		AuthMiddleware: mw,
-		MenuHandler:    menuHandler,
+		AuthHandler:      handler,
+		AuthMiddleware:   mw,
+		MenuHandler:      menuHandler,
+		PengadaanHandler: pengadaanHandler,
 	})
 
 	if err := router.Run(cfg.HTTPAddr); err != nil {

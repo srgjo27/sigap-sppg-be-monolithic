@@ -377,3 +377,95 @@ ALTER TABLE menu ADD COLUMN disetujui_oleh BIGINT REFERENCES users(id),
                  ADD COLUMN catatan TEXT,
                  ADD CONSTRAINT chk_menu_approved
                    CHECK (status <> 'disetujui' OR disetujui_at IS NOT NULL);
+
+-- Pemasok: nama unik per SPPG (tanpa beda huruf besar/kecil)
+CREATE UNIQUE INDEX uq_pemasok_sppg_nama ON pemasok (sppg_id, lower(nama));
+
+-- Purchase order: jejak kirim/tutup/batal dan validasi tanggal
+ALTER TABLE purchase_order
+  ADD COLUMN catatan TEXT,
+  ADD COLUMN dikirim_oleh BIGINT REFERENCES users(id),
+  ADD COLUMN dikirim_at TIMESTAMPTZ,
+  ADD COLUMN ditutup_oleh BIGINT REFERENCES users(id), -- diisi saat batal atau tutup manual
+  ADD COLUMN ditutup_at TIMESTAMPTZ,
+  ADD COLUMN alasan_tutup TEXT,
+  ADD CONSTRAINT chk_po_tgl_kirim
+    CHECK (tgl_kirim_diminta IS NULL OR tgl_kirim_diminta >= tgl_po),
+  ADD CONSTRAINT chk_po_dikirim
+    CHECK (status IN ('draf','batal') OR dikirim_at IS NOT NULL),
+  ADD CONSTRAINT chk_po_batal
+    CHECK (status <> 'batal' OR alasan_tutup IS NOT NULL);
+CREATE INDEX idx_po_sppg_status ON purchase_order (sppg_id, status);
+CREATE INDEX idx_po_pemasok ON purchase_order (pemasok_id);
+
+-- Satu bahan hanya sekali per PO
+ALTER TABLE po_item ADD CONSTRAINT uq_po_item_bahan UNIQUE (po_id, bahan_id);
+
+-- Tautan PO ke menu yang menjadi dasar pemesanan (N:M)
+CREATE TABLE po_menu (
+  po_id BIGINT NOT NULL REFERENCES purchase_order(id) ON DELETE CASCADE,
+  menu_id BIGINT NOT NULL REFERENCES menu(id),
+  PRIMARY KEY (po_id, menu_id)
+);
+CREATE INDEX idx_po_menu_menu ON po_menu (menu_id);
+
+-- Total PO selalu = jumlah subtotal item (dijaga database)
+CREATE OR REPLACE FUNCTION fn_po_hitung_total() RETURNS trigger AS $$
+BEGIN
+  UPDATE purchase_order po
+     SET total = COALESCE((SELECT SUM(subtotal) FROM po_item WHERE po_id = po.id), 0),
+         updated_at = now()
+   WHERE po.id = COALESCE(NEW.po_id, OLD.po_id);
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_po_item_total
+AFTER INSERT OR UPDATE OF qty_pesan, harga_satuan OR DELETE ON po_item
+FOR EACH ROW EXECUTE FUNCTION fn_po_hitung_total();
+
+-- Penerimaan bahan: sppg_id (konvensi multi-SPPG), idempotensi, jejak koreksi
+ALTER TABLE penerimaan_bahan
+  ADD COLUMN sppg_id BIGINT NOT NULL REFERENCES sppg(id),
+  ADD COLUMN client_ref UUID NOT NULL,                  -- dari header Idempotency-Key
+  ADD COLUMN lolos_suhu BOOLEAN,                        -- null bila bahan tidak mudah rusak
+  ADD COLUMN catatan TEXT,
+  ADD COLUMN dikoreksi_oleh BIGINT REFERENCES users(id),
+  ADD COLUMN dikoreksi_at TIMESTAMPTZ,
+  ADD CONSTRAINT uq_penerimaan_idem UNIQUE (client_ref, po_item_id),
+  ADD CONSTRAINT chk_penerimaan_qty CHECK (qty_diterima + qty_ditolak > 0),
+  ADD CONSTRAINT chk_penerimaan_rusak CHECK (kondisi <> 'rusak' OR qty_diterima = 0),
+  ADD CONSTRAINT chk_penerimaan_suhu CHECK (lolos_suhu IS DISTINCT FROM false OR qty_diterima = 0),
+  ADD CONSTRAINT chk_potong_nota CHECK (nilai_potong_nota >= 0);
+CREATE INDEX idx_penerimaan_sppg_waktu ON penerimaan_bahan (sppg_id, waktu_terima);
+CREATE INDEX idx_penerimaan_po_item ON penerimaan_bahan (po_item_id);
+
+-- Berkas foto bukti (dipakai ulang oleh MVP kedepannya)
+CREATE TABLE berkas (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  sppg_id BIGINT NOT NULL REFERENCES sppg(id),
+  object_key TEXT NOT NULL UNIQUE,                      -- path di object storage
+  mime_type VARCHAR(30) NOT NULL CHECK (mime_type IN ('image/jpeg','image/png','image/webp')),
+  ukuran_byte INT NOT NULL CHECK (ukuran_byte BETWEEN 1 AND 5242880),
+  sha256 CHAR(64) NOT NULL,
+  konteks VARCHAR(30) NOT NULL,                         -- penerimaan_bahan, checklist_sop, pengiriman, ...
+  diunggah_oleh BIGINT NOT NULL REFERENCES users(id),
+  diunggah_at TIMESTAMPTZ NOT NULL DEFAULT now(),      -- timestamp server = bukti waktu
+  ref_tabel VARCHAR(40),
+  ref_id BIGINT,
+  dipakai_at TIMESTAMPTZ,
+  CHECK ((dipakai_at IS NULL) = (ref_id IS NULL))
+);
+CREATE INDEX idx_berkas_belum_dipakai ON berkas (diunggah_at) WHERE dipakai_at IS NULL;
+
+-- Rekap per item PO: dasar status PO, tagihan, dan potong nota
+CREATE OR REPLACE VIEW v_po_item_rekap AS
+SELECT pi.id AS po_item_id, pi.po_id, pi.bahan_id, pi.qty_pesan, pi.harga_satuan, pi.subtotal,
+       COALESCE(SUM(pb.qty_diterima), 0)      AS qty_diterima,
+       COALESCE(SUM(pb.qty_ditolak), 0)       AS qty_ditolak,
+       COALESCE(SUM(pb.nilai_potong_nota), 0) AS nilai_potong_nota,
+       COALESCE(SUM(pb.qty_diterima), 0) >= pi.qty_pesan AS terpenuhi,
+       ROUND(LEAST(COALESCE(SUM(pb.qty_diterima), 0), pi.qty_pesan) * pi.harga_satuan, 2) AS nilai_tagihan
+FROM po_item pi
+LEFT JOIN penerimaan_bahan pb ON pb.po_item_id = pi.id
+GROUP BY pi.id;
