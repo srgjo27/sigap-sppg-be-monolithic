@@ -87,7 +87,7 @@ func (s *Service) CreatePemasok(ctx context.Context, actor *authdomain.Claims, i
 
 	created, err := s.pemasok.Create(ctx, p)
 	if err != nil {
-		return nil, fmt.Errorf("create pemasok: %w", err)
+		return nil, err
 	}
 
 	_ = s.audits.Append(ctx, &authdomain.AuditEntry{

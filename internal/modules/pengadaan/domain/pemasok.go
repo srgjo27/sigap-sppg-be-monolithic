@@ -127,8 +127,11 @@ func ValidateCreatePemasok(in CreatePemasokInput) error {
 	if !allowedJenisUsaha[in.JenisUsaha] {
 		fields["jenis_usaha"] = "unknown jenis_usaha"
 	}
-	if _, ok := ValidateNoHP(in.NoHP); !ok {
-		fields["no_hp"] = "invalid Indonesian phone format (08... or +628...)"
+	// NoHP is optional - only validate if provided
+	if in.NoHP != "" {
+		if _, ok := ValidateNoHP(in.NoHP); !ok {
+			fields["no_hp"] = "invalid Indonesian phone format (08... or +628...)"
+		}
 	}
 	if len(fields) > 0 {
 		return &ValidationError{Fields: fields}

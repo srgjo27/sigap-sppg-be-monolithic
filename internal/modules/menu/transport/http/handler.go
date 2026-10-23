@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -251,6 +252,7 @@ func (h *Handler) ListMenus(c *gin.Context) {
 	claims, _ := authhttp.CurrentUser(c)
 	res, err := h.svc.ListMenus(c.Request.Context(), claims, filter)
 	if err != nil {
+		log.Printf("ListMenus error: %v", err)
 		MapError(c, err)
 		return
 	}

@@ -32,6 +32,8 @@ func MapError(c *gin.Context, err error) {
 			c.JSON(http.StatusNotFound, ErrorEnvelope{Error: ErrorBody{Code: "NOT_FOUND", Message: "pemasok not found"}})
 		case domain.ErrPemasokExists:
 			c.JSON(http.StatusConflict, ErrorEnvelope{Error: ErrorBody{Code: "DUPLICATE_NAME", Message: "pemasok with this name already exists in this SPPG"}})
+		case domain.ErrSPPGNotFound:
+			c.JSON(http.StatusNotFound, ErrorEnvelope{Error: ErrorBody{Code: "SPPG_NOT_FOUND", Message: "sppg not found"}})
 		case domain.ErrPemasokInactive:
 			c.JSON(http.StatusUnprocessableEntity, ErrorEnvelope{Error: ErrorBody{Code: "PEMASOK_NONAKTIF", Message: "pemasok is inactive"}})
 		case domain.ErrBahanNotFound:

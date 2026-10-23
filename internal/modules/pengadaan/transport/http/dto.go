@@ -13,7 +13,7 @@ type CreatePemasokRequest struct {
 	Nama       string `json:"nama" binding:"required"`
 	JenisUsaha string `json:"jenis_usaha" binding:"required"`
 	Kontak     string `json:"kontak"`
-	NoHP       string `json:"no_hp" binding:"required"`
+	NoHP       string `json:"no_hp"`
 	Alamat     string `json:"alamat"`
 	SPPGID     *int64 `json:"sppg_id,omitempty"` // only for admin
 }

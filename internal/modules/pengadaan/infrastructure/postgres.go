@@ -3,10 +3,12 @@ package infrastructure
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	authdomain "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/domain"
@@ -51,6 +53,9 @@ func (p *PemasokPostgres) Create(ctx context.Context, pemasok *domain.Pemasok) (
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, domain.ErrPemasokExists
+		}
+		if isForeignKeyViolation(err) {
+			return nil, domain.ErrSPPGNotFound
 		}
 		return nil, fmt.Errorf("insert pemasok: %w", err)
 	}
@@ -679,4 +684,18 @@ func isUniqueViolation(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "23505") || strings.Contains(msg, "duplicate key") || strings.Contains(msg, "already exists")
+}
+
+func isForeignKeyViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for pgx PgError with code 23503 (foreign_key_violation)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23503"
+	}
+	// Fallback to string matching
+	msg := err.Error()
+	return strings.Contains(msg, "23503") || strings.Contains(msg, "foreign key") || strings.Contains(msg, "violates foreign key")
 }

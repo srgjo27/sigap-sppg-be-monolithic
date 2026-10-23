@@ -372,7 +372,7 @@ func (p *Postgres) FindMenuByID(ctx context.Context, id int64) (*domain.Menu, er
 // ListByScope returns menus ordered by tanggal ASC.
 func (p *Postgres) ListByScope(ctx context.Context, sppgID *int64, dari, sampai time.Time, status *string) ([]domain.Menu, error) {
 	const q = `SELECT id, sppg_id, tanggal, nama_menu, energi_kkal, protein_g, karbohidrat_g, lemak_g, target_porsi, catatan, dibuat_oleh, status, disetujui_oleh, disetujui_at, created_at, updated_at
-		FROM menu WHERE ($1::bigint IS NULL OR sppg_id=$1) AND tanggal >= $2 AND tanggal <= $3 AND ($4::text IS NULL OR status=$4)
+		FROM menu WHERE ($1::bigint IS NULL OR sppg_id=$1) AND tanggal >= $2 AND tanggal <= $3 AND ($4::menu_status IS NULL OR status=$4)
 		ORDER BY tanggal ASC, id ASC`
 	var statusVal any
 	if status != nil {
