@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/pengadaan/application"
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/pengadaan/domain"
 )
 
@@ -225,4 +226,276 @@ func unmarshalRawMessage(raw json.RawMessage, target any) error {
 		return nil
 	}
 	return json.Unmarshal(raw, target)
+}
+
+// ===== Purchase Order DTOs =====
+
+type POItemRequest struct {
+	BahanID     int64   `json:"bahan_id" binding:"required"`
+	QtyPesan    float64 `json:"qty_pesan" binding:"required"`
+	HargaSatuan float64 `json:"harga_satuan" binding:"required"`
+}
+
+type CreatePORequest struct {
+	PemasokID       int64           `json:"pemasok_id" binding:"required"`
+	TglKirimDiminta string          `json:"tgl_kirim_diminta" binding:"required"` // YYYY-MM-DD
+	SiklusID        *int64          `json:"siklus_id,omitempty"`
+	MenuIDs         []int64         `json:"menu_ids,omitempty"`
+	Catatan         string          `json:"catatan"`
+	Items           []POItemRequest `json:"items" binding:"required,min=1,max=50"`
+}
+
+type POFilter struct {
+	Status         []string `form:"status"`
+	PemasokID      *int64   `form:"pemasok_id"`
+	TglKirimDari   string   `form:"tgl_kirim_dari"`   // YYYY-MM-DD
+	TglKirimSampai string   `form:"tgl_kirim_sampai"` // YYYY-MM-DD
+	Q              string   `form:"q"`
+	SPPGID         *int64   `form:"sppg_id"` // only for admin/pengawas
+	Page           int      `form:"page,default=1"`
+	PerPage        int      `form:"per_page,default=20"`
+}
+
+type POItemResponse struct {
+	ID              int64   `json:"id"`
+	BahanID         int64   `json:"bahan_id"`
+	BahanNama       string  `json:"bahan_nama"`
+	BahanSatuan     string  `json:"bahan_satuan"`
+	BahanMudahRusak bool    `json:"bahan_mudah_rusak"`
+	QtyPesan        float64 `json:"qty_pesan"`
+	HargaSatuan     float64 `json:"harga_satuan"`
+	Subtotal        float64 `json:"subtotal"`
+	QtyDiterima     float64 `json:"qty_diterima"`
+	QtyDitolak      float64 `json:"qty_ditolak"`
+	QtyKurang       float64 `json:"qty_kurang"`
+	Terpenuhi       bool    `json:"terpenuhi"`
+	NilaiPotongNota float64 `json:"nilai_potong_nota"`
+	NilaiTagihan    float64 `json:"nilai_tagihan"`
+}
+
+type POListItemResponse struct {
+	ID                  int64      `json:"id"`
+	NomorPO             string     `json:"nomor_po"`
+	PemasokID           int64      `json:"pemasok_id"`
+	PemasokNama         string     `json:"pemasok_nama"`
+	TglPO               time.Time  `json:"tgl_po"`
+	TglKirimDiminta     *time.Time `json:"tgl_kirim_diminta"`
+	Status              string     `json:"status"`
+	Total               float64    `json:"total"`
+	Terlambat           bool       `json:"terlambat"`
+	JumlahItem          int        `json:"jumlah_item"`
+	JumlahItemTerpenuhi int        `json:"jumlah_item_terpenuhi"`
+}
+
+type POListResponse struct {
+	Data []POListItemResponse `json:"data"`
+	Meta PageMeta             `json:"meta"`
+}
+
+type PODetailRekapResponse struct {
+	TotalPesanan      float64 `json:"total_pesanan"`
+	TotalNilaiDikirim float64 `json:"total_nilai_dikirim"`
+	TotalPotongNota   float64 `json:"total_potong_nota"`
+	TotalTagihan      float64 `json:"total_tagihan"`
+}
+
+type PODetailPenerimaanResponse struct {
+	ID            int64     `json:"id"`
+	KodeLot       string    `json:"kode_lot"`
+	POItemID      int64     `json:"po_item_id"`
+	WaktuTerima   time.Time `json:"waktu_terima"`
+	QtyDiterima   float64   `json:"qty_diterima"`
+	QtyDitolak    float64   `json:"qty_ditolak"`
+	Kondisi       string    `json:"kondisi"`
+	DiperiksaOleh int64     `json:"diperiksa_oleh"`
+}
+
+type PODetailMenuResponse struct {
+	ID       int64     `json:"id"`
+	Tanggal  time.Time `json:"tanggal"`
+	NamaMenu string    `json:"nama_menu"`
+}
+
+type PODetailResponse struct {
+	ID              int64                        `json:"id"`
+	SPPGID          int64                        `json:"sppg_id"`
+	NomorPO         string                       `json:"nomor_po"`
+	PemasokID       int64                        `json:"pemasok_id"`
+	PemasokNama     string                       `json:"pemasok_nama"`
+	SiklusID        *int64                       `json:"siklus_id,omitempty"`
+	TglPO           time.Time                    `json:"tgl_po"`
+	TglKirimDiminta *time.Time                   `json:"tgl_kirim_diminta"`
+	Status          string                       `json:"status"`
+	Catatan         string                       `json:"catatan"`
+	DibuatOleh      int64                        `json:"dibuat_oleh"`
+	DikirimOleh     *int64                       `json:"dikirim_oleh,omitempty"`
+	DikirimAt       *time.Time                   `json:"dikirim_at,omitempty"`
+	DitutupOleh     *int64                       `json:"ditutup_oleh,omitempty"`
+	DitutupAt       *time.Time                   `json:"ditutup_at,omitempty"`
+	AlasanTutup     string                       `json:"alasan_tutup"`
+	CreatedAt       time.Time                    `json:"created_at"`
+	UpdatedAt       time.Time                    `json:"updated_at"`
+	Items           []POItemResponse             `json:"items"`
+	RekapNilai      PODetailRekapResponse        `json:"rekap_nilai"`
+	Penerimaan      []PODetailPenerimaanResponse `json:"penerimaan"`
+	Menu            []PODetailMenuResponse       `json:"menu"`
+	Warnings        []string                     `json:"warnings,omitempty"`
+}
+
+// Helpers for PO
+
+func toPOItemResponse(item domain.PODetailItem) POItemResponse {
+	return POItemResponse{
+		ID:              item.ID,
+		BahanID:         item.BahanID,
+		BahanNama:       item.BahanNama,
+		BahanSatuan:     item.BahanSatuan,
+		BahanMudahRusak: item.BahanMudahRusak,
+		QtyPesan:        item.QtyPesan,
+		HargaSatuan:     item.HargaSatuan,
+		Subtotal:        item.Subtotal,
+		QtyDiterima:     item.QtyDiterima,
+		QtyDitolak:      item.QtyDitolak,
+		QtyKurang:       item.QtyKurang,
+		Terpenuhi:       item.Terpenuhi,
+		NilaiPotongNota: item.NilaiPotongNota,
+		NilaiTagihan:    item.NilaiTagihan,
+	}
+}
+
+func toPOListItemResponse(item domain.POListItem) POListItemResponse {
+	return POListItemResponse{
+		ID:                  item.ID,
+		NomorPO:             item.NomorPO,
+		PemasokID:           item.PemasokID,
+		PemasokNama:         item.PemasokNama,
+		TglPO:               item.TglPO,
+		TglKirimDiminta:     item.TglKirimDiminta,
+		Status:              item.Status,
+		Total:               item.Total,
+		Terlambat:           item.Terlambat,
+		JumlahItem:          item.JumlahItem,
+		JumlahItemTerpenuhi: item.JumlahItemTerpenuhi,
+	}
+}
+
+// toPOCreateResponse creates a response for PO creation (MVP-003.3).
+func toPOCreateResponse(res *application.POCreateResult) PODetailResponse {
+	items := make([]POItemResponse, len(res.Items))
+	for i, item := range res.Items {
+		items[i] = POItemResponse{
+			ID:              item.ID,
+			BahanID:         item.BahanID,
+			BahanNama:       "", // Will be filled if needed
+			BahanSatuan:     "",
+			BahanMudahRusak: false,
+			QtyPesan:        item.QtyPesan,
+			HargaSatuan:     item.HargaSatuan,
+			Subtotal:        item.Subtotal,
+			QtyDiterima:     0,
+			QtyDitolak:      0,
+			QtyKurang:       item.QtyPesan,
+			Terpenuhi:       false,
+			NilaiPotongNota: 0,
+			NilaiTagihan:    0,
+		}
+	}
+	return PODetailResponse{
+		ID:              res.PO.ID,
+		SPPGID:          res.PO.SPPGID,
+		NomorPO:         res.PO.NomorPO,
+		PemasokID:       res.PO.PemasokID,
+		PemasokNama:     "", // Would need to fetch pemasok name
+		SiklusID:        res.PO.SiklusID,
+		TglPO:           res.PO.TglPO,
+		TglKirimDiminta: res.PO.TglKirimDiminta,
+		Status:          res.PO.Status,
+		Catatan:         derefString(res.PO.Catatan),
+		DibuatOleh:      res.PO.DibuatOleh,
+		DikirimOleh:     res.PO.DikirimOleh,
+		DikirimAt:       res.PO.DikirimAt,
+		DitutupOleh:     res.PO.DitutupOleh,
+		DitutupAt:       res.PO.DitutupAt,
+		AlasanTutup:     derefString(res.PO.AlasanTutup),
+		CreatedAt:       res.PO.CreatedAt,
+		UpdatedAt:       res.PO.UpdatedAt,
+		Items:           items,
+		Warnings:        res.Warnings,
+	}
+}
+
+func toPOListResponse(res *application.POListResult) POListResponse {
+	data := make([]POListItemResponse, len(res.Data))
+	for i, item := range res.Data {
+		data[i] = toPOListItemResponse(item)
+	}
+	return POListResponse{
+		Data: data,
+		Meta: PageMeta{Page: res.Meta.Page, PerPage: res.Meta.PerPage, Total: res.Meta.Total},
+	}
+}
+
+func toPODetailResponse(detail *domain.PODetail) PODetailResponse {
+	items := make([]POItemResponse, len(detail.Items))
+	for i, item := range detail.Items {
+		items[i] = toPOItemResponse(item)
+	}
+	penerimaan := make([]PODetailPenerimaanResponse, len(detail.Penerimaan))
+	for i, p := range detail.Penerimaan {
+		penerimaan[i] = PODetailPenerimaanResponse{
+			ID:            p.ID,
+			KodeLot:       p.KodeLot,
+			POItemID:      p.POItemID,
+			WaktuTerima:   p.WaktuTerima,
+			QtyDiterima:   p.QtyDiterima,
+			QtyDitolak:    p.QtyDitolak,
+			Kondisi:       p.Kondisi,
+			DiperiksaOleh: p.DiperiksaOleh,
+		}
+	}
+	menu := make([]PODetailMenuResponse, len(detail.Menu))
+	for i, m := range detail.Menu {
+		menu[i] = PODetailMenuResponse{
+			ID:       m.ID,
+			Tanggal:  m.Tanggal,
+			NamaMenu: m.NamaMenu,
+		}
+	}
+	return PODetailResponse{
+		ID:              detail.ID,
+		SPPGID:          detail.SPPGID,
+		NomorPO:         detail.NomorPO,
+		PemasokID:       detail.PemasokID,
+		PemasokNama:     detail.PemasokNama,
+		SiklusID:        detail.SiklusID,
+		TglPO:           detail.TglPO,
+		TglKirimDiminta: detail.TglKirimDiminta,
+		Status:          detail.Status,
+		Catatan:         derefString(detail.Catatan),
+		DibuatOleh:      detail.DibuatOleh,
+		DikirimOleh:     detail.DikirimOleh,
+		DikirimAt:       detail.DikirimAt,
+		DitutupOleh:     detail.DitutupOleh,
+		DitutupAt:       detail.DitutupAt,
+		AlasanTutup:     derefString(detail.AlasanTutup),
+		CreatedAt:       detail.CreatedAt,
+		UpdatedAt:       detail.UpdatedAt,
+		Items:           items,
+		RekapNilai: PODetailRekapResponse{
+			TotalPesanan:      detail.RekapNilai.TotalPesanan,
+			TotalNilaiDikirim: detail.RekapNilai.TotalNilaiDikirim,
+			TotalPotongNota:   detail.RekapNilai.TotalPotongNota,
+			TotalTagihan:      detail.RekapNilai.TotalTagihan,
+		},
+		Penerimaan: penerimaan,
+		Menu:       menu,
+	}
+}
+
+// derefString returns the string value or empty string if nil.
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }

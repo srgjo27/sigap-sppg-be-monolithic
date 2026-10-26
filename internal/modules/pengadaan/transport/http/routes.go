@@ -7,7 +7,7 @@ import (
 	authhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/transport/http"
 )
 
-// RegisterRoutes mounts MVP-003.1 and MVP-003.2 endpoints under /api/v1.
+// RegisterRoutes mounts MVP-003.1, MVP-003.2, MVP-003.3, MVP-003.4 endpoints under /api/v1.
 // RBAC follows docs/product/mvp-003-pengadaan-penerimaan.md and reuses MVP-001.8 middleware.
 func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *authhttp.Middleware) {
 	freshPassword := mw.RequirePasswordChanged()
@@ -38,4 +38,19 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *authhttp.Middleware) {
 	)
 
 	rg.GET("/pengadaan/kebutuhan", mw.Authenticate(), freshPassword, readOnly, canReadKebutuhan, h.GetKebutuhan)
+
+	canCreatePO := mw.RequireRoles(authdomain.RoleAkuntan)
+
+	canReadPO := mw.RequireRoles(
+		authdomain.RoleAdmin,
+		authdomain.RoleKepalaSPPG,
+		authdomain.RoleAkuntan,
+		authdomain.RoleAhliGizi,
+		authdomain.RolePetugasDapur,
+		authdomain.RolePengawas,
+	)
+
+	rg.POST("/purchase-orders", mw.Authenticate(), freshPassword, readOnly, canCreatePO, h.CreatePurchaseOrder)
+	rg.GET("/purchase-orders", mw.Authenticate(), freshPassword, readOnly, canReadPO, h.ListPurchaseOrders)
+	rg.GET("/purchase-orders/:id", mw.Authenticate(), freshPassword, readOnly, canReadPO, h.GetPurchaseOrder)
 }

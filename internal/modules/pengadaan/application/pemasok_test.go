@@ -126,6 +126,17 @@ func (m *mockMenuRepo) FindByID(ctx context.Context, id int64) (*domain.Menu, er
 	return m.menus[id], nil
 }
 
+// FindByIDs finds multiple menus by IDs.
+func (m *mockMenuRepo) FindByIDs(ctx context.Context, ids []int64) ([]*domain.Menu, error) {
+	var result []*domain.Menu
+	for _, id := range ids {
+		if menu, ok := m.menus[id]; ok {
+			result = append(result, menu)
+		}
+	}
+	return result, nil
+}
+
 type mockPORepo struct {
 	items map[int64][]domain.POItem
 	menus map[int64][]int64 // menu_id -> po_ids
@@ -156,6 +167,59 @@ func (m *mockPORepo) ListPOMenus(ctx context.Context, menuIDs []int64) (map[int6
 		result[id] = m.menus[id]
 	}
 	return result, nil
+}
+
+// Create creates a purchase order with items and menu links (mock implementation).
+func (m *mockPORepo) Create(ctx context.Context, po *domain.PurchaseOrder, items []domain.POItem, menuIDs []int64) (*domain.PurchaseOrder, []domain.POItem, error) {
+	// Assign mock IDs
+	po.ID = 1
+	for i := range items {
+		items[i].ID = int64(i + 1)
+		items[i].POID = po.ID
+	}
+	return po, items, nil
+}
+
+// Exec executes a query without returning rows (mock implementation).
+func (m *mockPORepo) Exec(ctx context.Context, query string, args ...any) error {
+	return nil
+}
+
+// QueryRow executes a query that returns at most one row (mock implementation).
+func (m *mockPORepo) QueryRow(ctx context.Context, query string, args ...any) interface{ Scan(dest ...any) error } {
+	return &mockRowScanner{}
+}
+
+type mockRowScanner struct{}
+
+func (m *mockRowScanner) Scan(dest ...any) error {
+	// Return a mock sequence number
+	if len(dest) > 0 {
+		if ptr, ok := dest[0].(*int); ok {
+			*ptr = 1
+		}
+	}
+	return nil
+}
+
+// FindByID looks up a purchase order by ID (mock implementation).
+func (m *mockPORepo) FindByID(ctx context.Context, id int64) (*domain.PurchaseOrder, error) {
+	return nil, nil
+}
+
+// GetDetail returns detailed PO with items, rekap, penerimaan, and menus (mock implementation).
+func (m *mockPORepo) GetDetail(ctx context.Context, id int64) (*domain.PODetail, error) {
+	return nil, nil
+}
+
+// GetPOItemRekap returns rekap data for PO items (mock implementation).
+func (m *mockPORepo) GetPOItemRekap(ctx context.Context, poItemIDs []int64) (map[int64]domain.POItemRekap, error) {
+	return nil, nil
+}
+
+// List returns filtered purchase orders (mock implementation).
+func (m *mockPORepo) List(ctx context.Context, sppgID int64, filter domain.POFilter) ([]domain.POListItem, int, error) {
+	return nil, 0, nil
 }
 
 type mockSPPGProvider struct {

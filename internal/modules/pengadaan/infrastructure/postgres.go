@@ -361,7 +361,7 @@ func scanMenu(row interface{ Scan(...any) error }) (*domain.Menu, error) {
 }
 
 func (p *MenuPostgres) ListByScope(ctx context.Context, sppgID *int64, dari, sampai time.Time, status *string) ([]domain.Menu, error) {
-	const q = `SELECT ` + menuColumns + ` FROM menu WHERE ($1::bigint IS NULL OR sppg_id=$1) AND tanggal >= $2 AND tanggal <= $3 AND ($4::text IS NULL OR status=$4) ORDER BY tanggal ASC, id ASC`
+	const q = `SELECT ` + menuColumns + ` FROM menu WHERE ($1::bigint IS NULL OR sppg_id=$1) AND tanggal >= $2 AND tanggal <= $3 AND ($4::menu_status IS NULL OR status=$4::menu_status) ORDER BY tanggal ASC, id ASC`
 	var statusVal any
 	if status != nil {
 		statusVal = *status
@@ -430,6 +430,31 @@ func (p *MenuPostgres) FindByID(ctx context.Context, id int64) (*domain.Menu, er
 		return nil, fmt.Errorf("find menu: %w", err)
 	}
 	return m, nil
+}
+
+// FindByIDs finds multiple menus by IDs.
+func (p *MenuPostgres) FindByIDs(ctx context.Context, ids []int64) ([]*domain.Menu, error) {
+	if len(ids) == 0 {
+		return []*domain.Menu{}, nil
+	}
+	const q = `SELECT ` + menuColumns + ` FROM menu WHERE id = ANY($1)`
+	rows, err := p.Pool.Query(ctx, q, ids)
+	if err != nil {
+		return nil, fmt.Errorf("find menus by ids: %w", err)
+	}
+	defer rows.Close()
+	var out []*domain.Menu
+	for rows.Next() {
+		m, err := scanMenu(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan menu: %w", err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows menus: %w", err)
+	}
+	return out, nil
 }
 
 // PurchaseOrderPostgres implements PurchaseOrderRepository
@@ -517,7 +542,7 @@ func (p *PurchaseOrderPostgres) ListBySPPGAndStatus(ctx context.Context, sppgID 
 	if len(statuses) > 0 {
 		placeholders := make([]string, len(statuses))
 		for i := range statuses {
-			placeholders[i] = fmt.Sprintf("$%d", i+2)
+			placeholders[i] = fmt.Sprintf("$%d::po_status", i+2)
 			args = append(args, statuses[i])
 		}
 		statusClause = " AND status IN (" + strings.Join(placeholders, ",") + ")"
@@ -596,6 +621,363 @@ func (p *PurchaseOrderPostgres) ListPOMenus(ctx context.Context, menuIDs []int64
 	return result, nil
 }
 
+// Create creates a purchase order with items and menu links in a transaction.
+func (p *PurchaseOrderPostgres) Create(ctx context.Context, po *domain.PurchaseOrder, items []domain.POItem, menuIDs []int64) (*domain.PurchaseOrder, []domain.POItem, error) {
+	tx, err := p.Pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Insert purchase_order
+	const poQ = `INSERT INTO purchase_order (sppg_id, nomor_po, pemasok_id, siklus_id, tgl_po, tgl_kirim_diminta, status, dibuat_oleh, catatan, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now(),now()) RETURNING ` + poColumns
+	var siklusID any
+	if po.SiklusID != nil {
+		siklusID = *po.SiklusID
+	}
+	var tglKirim any
+	if po.TglKirimDiminta != nil {
+		tglKirim = *po.TglKirimDiminta
+	}
+	var catatan any
+	if po.Catatan != nil {
+		catatan = *po.Catatan
+	}
+	row := tx.QueryRow(ctx, poQ, po.SPPGID, po.NomorPO, po.PemasokID, siklusID, po.TglPO, tglKirim, po.Status, po.DibuatOleh, catatan)
+	createdPO, err := scanPO(row)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, nil, domain.ErrPONotFound // or custom error for duplicate nomor_po
+		}
+		return nil, nil, fmt.Errorf("insert purchase_order: %w", err)
+	}
+
+	// Insert po_item
+	createdItems := make([]domain.POItem, 0, len(items))
+	for _, item := range items {
+		const itemQ = `INSERT INTO po_item (po_id, bahan_id, qty_pesan, harga_satuan) VALUES ($1,$2,$3,$4) RETURNING ` + poItemColumns
+		itemRow := tx.QueryRow(ctx, itemQ, createdPO.ID, item.BahanID, item.QtyPesan, item.HargaSatuan)
+		createdItem, err := scanPOItem(itemRow)
+		if err != nil {
+			if isUniqueViolation(err) {
+				return nil, nil, domain.ErrItemDuplicate
+			}
+			return nil, nil, fmt.Errorf("insert po_item: %w", err)
+		}
+		createdItems = append(createdItems, *createdItem)
+	}
+
+	// Insert po_menu links
+	for _, menuID := range menuIDs {
+		const menuQ = `INSERT INTO po_menu (po_id, menu_id) VALUES ($1,$2)`
+		if _, err := tx.Exec(ctx, menuQ, createdPO.ID, menuID); err != nil {
+			if isForeignKeyViolation(err) {
+				return nil, nil, domain.ErrMenuNotFound
+			}
+			return nil, nil, fmt.Errorf("insert po_menu: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, fmt.Errorf("commit po: %w", err)
+	}
+
+	return createdPO, createdItems, nil
+}
+
+// FindByID looks up a purchase order by ID.
+func (p *PurchaseOrderPostgres) FindByID(ctx context.Context, id int64) (*domain.PurchaseOrder, error) {
+	const q = `SELECT ` + poColumns + ` FROM purchase_order WHERE id=$1 LIMIT 1`
+	row := p.Pool.QueryRow(ctx, q, id)
+	res, err := scanPO(row)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find po: %w", err)
+	}
+	return res, nil
+}
+
+// List returns filtered purchase orders for list view.
+func (p *PurchaseOrderPostgres) List(ctx context.Context, sppgID int64, filter domain.POFilter) ([]domain.POListItem, int, error) {
+	filter.Normalize()
+	where := `WHERE ($1::bigint = 0 OR po.sppg_id=$1)`
+	args := []any{sppgID}
+	argIdx := 2
+
+	if len(filter.Status) > 0 {
+		placeholders := make([]string, len(filter.Status))
+		for i := range filter.Status {
+			placeholders[i] = fmt.Sprintf("$%d::po_status", argIdx)
+			args = append(args, filter.Status[i])
+			argIdx++
+		}
+		where += " AND po.status IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	if filter.PemasokID != nil {
+		where += fmt.Sprintf(" AND po.pemasok_id=$%d", argIdx)
+		args = append(args, *filter.PemasokID)
+		argIdx++
+	}
+	if filter.TglKirimDari != nil {
+		where += fmt.Sprintf(" AND po.tgl_kirim_diminta >= $%d", argIdx)
+		args = append(args, *filter.TglKirimDari)
+		argIdx++
+	}
+	if filter.TglKirimSampai != nil {
+		where += fmt.Sprintf(" AND po.tgl_kirim_diminta <= $%d", argIdx)
+		args = append(args, *filter.TglKirimSampai)
+		argIdx++
+	}
+	if filter.Q != nil && *filter.Q != "" {
+		where += fmt.Sprintf(" AND po.nomor_po ILIKE $%d", argIdx)
+		args = append(args, "%"+*filter.Q+"%")
+		argIdx++
+	}
+
+	countQ := `SELECT COUNT(*) FROM purchase_order po ` + where
+	var total int
+	if err := p.Pool.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count pos: %w", err)
+	}
+
+	listQ := `SELECT po.id, po.nomor_po, po.pemasok_id, p.nama as pemasok_nama, po.tgl_po, po.tgl_kirim_diminta, po.status, po.total,
+		(SELECT COUNT(*) FROM po_item WHERE po_id=po.id) as jumlah_item,
+		(SELECT COUNT(*) FROM po_item pi WHERE pi.po_id=po.id AND pi.qty_pesan <= COALESCE((SELECT SUM(pb.qty_diterima) FROM penerimaan_bahan pb WHERE pb.po_item_id=pi.id), 0)) as jumlah_item_terpenuhi
+		FROM purchase_order po
+		JOIN pemasok p ON p.id = po.pemasok_id
+		` + where + ` ORDER BY po.tgl_kirim_diminta ASC NULLS LAST, po.nomor_po ASC LIMIT $` + fmt.Sprintf("%d", argIdx) + ` OFFSET $` + fmt.Sprintf("%d", argIdx+1)
+	args = append(args, filter.Limit, filter.Offset())
+
+	rows, err := p.Pool.Query(ctx, listQ, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list pos: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.POListItem
+	for rows.Next() {
+		var item domain.POListItem
+		var tglKirim sql.NullTime
+		var total sql.NullFloat64
+		if err := rows.Scan(&item.ID, &item.NomorPO, &item.PemasokID, &item.PemasokNama, &item.TglPO, &tglKirim, &item.Status, &total, &item.JumlahItem, &item.JumlahItemTerpenuhi); err != nil {
+			return nil, 0, fmt.Errorf("scan po list: %w", err)
+		}
+		if tglKirim.Valid {
+			item.TglKirimDiminta = &tglKirim.Time
+		}
+		if total.Valid {
+			item.Total = total.Float64
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("rows po list: %w", err)
+	}
+	if out == nil {
+		out = []domain.POListItem{}
+	}
+	return out, total, nil
+}
+
+// GetDetail returns detailed PO with items, rekap, penerimaan, and menus.
+func (p *PurchaseOrderPostgres) GetDetail(ctx context.Context, id int64) (*domain.PODetail, error) {
+	// Get PO with pemasok name (explicit columns in poColumns order — po.* returns physical order)
+	const poQ = `SELECT po.id, po.sppg_id, po.nomor_po, po.pemasok_id, po.siklus_id, po.tgl_po, po.tgl_kirim_diminta, po.total, po.status, po.dibuat_oleh, po.catatan, po.dikirim_oleh, po.dikirim_at, po.ditutup_oleh, po.ditutup_at, po.alasan_tutup, po.created_at, po.updated_at, p.nama as pemasok_nama
+		FROM purchase_order po JOIN pemasok p ON p.id=po.pemasok_id WHERE po.id=$1`
+	row := p.Pool.QueryRow(ctx, poQ, id)
+	var po domain.PurchaseOrder
+	var pemasokNama string
+	var siklusID sql.NullInt64
+	var tglKirim sql.NullTime
+	var catatan sql.NullString
+	var dikirimOleh, ditutupOleh sql.NullInt64
+	var dikirimAt, ditutupAt sql.NullTime
+	var alasanTutup sql.NullString
+	var created, updated sql.NullTime
+	var total sql.NullFloat64
+	var status sql.NullString
+	if err := row.Scan(&po.ID, &po.SPPGID, &po.NomorPO, &po.PemasokID, &siklusID, &po.TglPO, &tglKirim, &total, &status, &po.DibuatOleh, &catatan, &dikirimOleh, &dikirimAt, &ditutupOleh, &ditutupAt, &alasanTutup, &created, &updated, &pemasokNama); err != nil {
+		if isNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find po detail: %w", err)
+	}
+	if siklusID.Valid {
+		v := siklusID.Int64
+		po.SiklusID = &v
+	}
+	if tglKirim.Valid {
+		po.TglKirimDiminta = &tglKirim.Time
+	}
+	if total.Valid {
+		po.Total = total.Float64
+	}
+	po.Status = status.String
+	if catatan.Valid {
+		po.Catatan = &catatan.String
+	}
+	if dikirimOleh.Valid {
+		v := dikirimOleh.Int64
+		po.DikirimOleh = &v
+	}
+	if dikirimAt.Valid {
+		po.DikirimAt = &dikirimAt.Time
+	}
+	if ditutupOleh.Valid {
+		v := ditutupOleh.Int64
+		po.DitutupOleh = &v
+	}
+	if ditutupAt.Valid {
+		po.DitutupAt = &ditutupAt.Time
+	}
+	if alasanTutup.Valid {
+		po.AlasanTutup = &alasanTutup.String
+	}
+	if created.Valid {
+		po.CreatedAt = created.Time
+	}
+	if updated.Valid {
+		po.UpdatedAt = updated.Time
+	}
+
+	detail := &domain.PODetail{
+		PurchaseOrder: po,
+		PemasokNama:   pemasokNama,
+	}
+
+	// Get items with rekap from v_po_item_rekap
+	const itemsQ = `SELECT pi.id, pi.bahan_id, pi.qty_pesan, pi.harga_satuan, pi.subtotal,
+		b.nama, b.satuan, b.mudah_rusak,
+		COALESCE(r.qty_diterima, 0) as qty_diterima,
+		COALESCE(r.qty_ditolak, 0) as qty_ditolak,
+		COALESCE(r.nilai_potong_nota, 0) as nilai_potong_nota,
+		COALESCE(r.terpenuhi, false) as terpenuhi,
+		COALESCE(r.nilai_tagihan, 0) as nilai_tagihan
+		FROM po_item pi
+		JOIN bahan b ON b.id = pi.bahan_id
+		LEFT JOIN v_po_item_rekap r ON r.po_item_id = pi.id
+		WHERE pi.po_id = $1 ORDER BY pi.id ASC`
+	rows, err := p.Pool.Query(ctx, itemsQ, id)
+	if err != nil {
+		return nil, fmt.Errorf("get po items: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item domain.PODetailItem
+		var qty, harga, subtotal, qtyDiterima, qtyDitolak, potong, tagihan sql.NullFloat64
+		var terpenuhi sql.NullBool
+		if err := rows.Scan(&item.ID, &item.BahanID, &qty, &harga, &subtotal, &item.BahanNama, &item.BahanSatuan, &item.BahanMudahRusak, &qtyDiterima, &qtyDitolak, &potong, &terpenuhi, &tagihan); err != nil {
+			return nil, fmt.Errorf("scan po detail item: %w", err)
+		}
+		item.QtyPesan = qty.Float64
+		item.HargaSatuan = harga.Float64
+		item.Subtotal = subtotal.Float64
+		item.QtyDiterima = qtyDiterima.Float64
+		item.QtyDitolak = qtyDitolak.Float64
+		item.QtyKurang = item.QtyPesan - item.QtyDiterima
+		if item.QtyKurang < 0 {
+			item.QtyKurang = 0
+		}
+		item.NilaiPotongNota = potong.Float64
+		item.Terpenuhi = terpenuhi.Bool
+		item.NilaiTagihan = tagihan.Float64
+		detail.Items = append(detail.Items, item)
+	}
+
+	// Compute rekap nilai
+	var totalPesanan, totalNilaiDikirim, totalPotongNota, totalTagihan float64
+	for _, item := range detail.Items {
+		totalPesanan += item.Subtotal
+		totalNilaiDikirim += (item.QtyDiterima + item.QtyDitolak) * item.HargaSatuan
+		totalPotongNota += item.NilaiPotongNota
+		totalTagihan += item.NilaiTagihan
+	}
+	detail.RekapNilai = domain.PODetailRekap{
+		TotalPesanan:      totalPesanan,
+		TotalNilaiDikirim: totalNilaiDikirim,
+		TotalPotongNota:   totalPotongNota,
+		TotalTagihan:      totalTagihan,
+	}
+
+	// Get penerimaan (lots)
+	const penerimaanQ = `SELECT pb.id, pb.kode_lot, pb.po_item_id, pb.waktu_terima, pb.qty_diterima, pb.qty_ditolak, pb.kondisi, pb.diperiksa_oleh
+		FROM penerimaan_bahan pb
+		JOIN po_item pi ON pi.id = pb.po_item_id
+		WHERE pi.po_id = $1 ORDER BY pb.waktu_terima ASC`
+	penerimaanRows, err := p.Pool.Query(ctx, penerimaanQ, id)
+	if err != nil {
+		return nil, fmt.Errorf("get penerimaan: %w", err)
+	}
+	defer penerimaanRows.Close()
+	for penerimaanRows.Next() {
+		var p domain.PODetailPenerimaan
+		if err := penerimaanRows.Scan(&p.ID, &p.KodeLot, &p.POItemID, &p.WaktuTerima, &p.QtyDiterima, &p.QtyDitolak, &p.Kondisi, &p.DiperiksaOleh); err != nil {
+			return nil, fmt.Errorf("scan penerimaan: %w", err)
+		}
+		detail.Penerimaan = append(detail.Penerimaan, p)
+	}
+
+	// Get linked menus
+	const menusQ = `SELECT m.id, m.tanggal, m.nama_menu FROM menu m JOIN po_menu pm ON pm.menu_id = m.id WHERE pm.po_id = $1 ORDER BY m.tanggal ASC`
+	menuRows, err := p.Pool.Query(ctx, menusQ, id)
+	if err != nil {
+		return nil, fmt.Errorf("get po menus: %w", err)
+	}
+	defer menuRows.Close()
+	for menuRows.Next() {
+		var m domain.PODetailMenu
+		if err := menuRows.Scan(&m.ID, &m.Tanggal, &m.NamaMenu); err != nil {
+			return nil, fmt.Errorf("scan po menu: %w", err)
+		}
+		detail.Menu = append(detail.Menu, m)
+	}
+
+	return detail, nil
+}
+
+// GetPOItemRekap returns rekap data for PO items.
+func (p *PurchaseOrderPostgres) GetPOItemRekap(ctx context.Context, poItemIDs []int64) (map[int64]domain.POItemRekap, error) {
+	out := make(map[int64]domain.POItemRekap)
+	if len(poItemIDs) == 0 {
+		return out, nil
+	}
+	const q = `SELECT po_item_id, qty_diterima, qty_ditolak, nilai_potong_nota, terpenuhi, nilai_tagihan FROM v_po_item_rekap WHERE po_item_id = ANY($1)`
+	rows, err := p.Pool.Query(ctx, q, poItemIDs)
+	if err != nil {
+		return nil, fmt.Errorf("get po item rekap: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r domain.POItemRekap
+		var qtyDiterima, qtyDitolak, potong, tagihan sql.NullFloat64
+		var terpenuhi sql.NullBool
+		if err := rows.Scan(&r.POItemID, &qtyDiterima, &qtyDitolak, &potong, &terpenuhi, &tagihan); err != nil {
+			return nil, fmt.Errorf("scan po item rekap: %w", err)
+		}
+		r.QtyDiterima = qtyDiterima.Float64
+		r.QtyDitolak = qtyDitolak.Float64
+		r.NilaiPotongNota = potong.Float64
+		r.Terpenuhi = terpenuhi.Bool
+		r.NilaiTagihan = tagihan.Float64
+		out[r.POItemID] = r
+	}
+	return out, nil
+}
+
+// Exec executes a query without returning rows (for advisory lock).
+func (p *PurchaseOrderPostgres) Exec(ctx context.Context, query string, args ...any) error {
+	_, err := p.Pool.Exec(ctx, query, args...)
+	return err
+}
+
+// QueryRow executes a query that returns at most one row (for sequence number).
+func (p *PurchaseOrderPostgres) QueryRow(ctx context.Context, query string, args ...any) interface{ Scan(dest ...any) error } {
+	return p.Pool.QueryRow(ctx, query, args...)
+}
+
 // SPPGPostgres implements SPPGProvider
 type SPPGPostgres struct {
 	Pool *pgxpool.Pool
@@ -615,6 +997,72 @@ func (p *SPPGPostgres) GetKode(ctx context.Context, id int64) (string, error) {
 		return "", fmt.Errorf("get sppg kode: %w", err)
 	}
 	return kode, nil
+}
+
+// SiklusPostgres implements SiklusRepository
+type SiklusPostgres struct {
+	Pool *pgxpool.Pool
+}
+
+func NewSiklusPostgres(pool *pgxpool.Pool) *SiklusPostgres {
+	return &SiklusPostgres{Pool: pool}
+}
+
+const siklusColumns = `id, sppg_id, periode_mulai, periode_selesai, dana_diajukan, dana_diterima, sisa_siklus_lalu, status, diajukan_at, dicairkan_at, dilaporkan_at, created_at, updated_at`
+
+func scanSiklus(row interface{ Scan(...any) error }) (*domain.SiklusDana, error) {
+	var s domain.SiklusDana
+	var periodeMulai, periodeSelesai time.Time
+	var danaDiterima sql.NullFloat64
+	var diajukanAt, dicairkanAt, dilaporkanAt sql.NullTime
+	var created, updated sql.NullTime
+	var danaDiajukan, sisaSiklusLalu sql.NullFloat64
+	var status sql.NullString
+	if err := row.Scan(&s.ID, &s.SPPGID, &periodeMulai, &periodeSelesai, &danaDiajukan, &danaDiterima, &sisaSiklusLalu, &status, &diajukanAt, &dicairkanAt, &dilaporkanAt, &created, &updated); err != nil {
+		return nil, err
+	}
+	s.PeriodeMulai = periodeMulai
+	s.PeriodeSelesai = periodeSelesai
+	if danaDiajukan.Valid {
+		s.DanaDiajukan = danaDiajukan.Float64
+	}
+	if danaDiterima.Valid {
+		v := danaDiterima.Float64
+		s.DanaDiterima = &v
+	}
+	if sisaSiklusLalu.Valid {
+		s.SisaSiklusLalu = sisaSiklusLalu.Float64
+	}
+	s.Status = status.String
+	if diajukanAt.Valid {
+		s.DiajukanAt = &diajukanAt.Time
+	}
+	if dicairkanAt.Valid {
+		s.DicairkanAt = &dicairkanAt.Time
+	}
+	if dilaporkanAt.Valid {
+		s.DilaporkanAt = &dilaporkanAt.Time
+	}
+	if created.Valid {
+		s.CreatedAt = created.Time
+	}
+	if updated.Valid {
+		s.UpdatedAt = updated.Time
+	}
+	return &s, nil
+}
+
+func (p *SiklusPostgres) FindByID(ctx context.Context, id int64) (*domain.SiklusDana, error) {
+	const q = `SELECT ` + siklusColumns + ` FROM siklus_dana WHERE id=$1 LIMIT 1`
+	row := p.Pool.QueryRow(ctx, q, id)
+	res, err := scanSiklus(row)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("find siklus: %w", err)
+	}
+	return res, nil
 }
 
 // AuditPostgres implements AuditRepository

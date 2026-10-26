@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"fmt"
 	"math"
 	"regexp"
 	"strings"
@@ -175,9 +174,4 @@ func IsValidJenisUsaha(j string) bool {
 // RoundToTwoDecimals rounds a float64 to 2 decimal places.
 func RoundToTwoDecimals(v float64) float64 {
 	return math.Round(v*100) / 100
-}
-
-// FormatMoney formats a float64 as string with 2 decimal places.
-func FormatMoney(v float64) string {
-	return fmt.Sprintf("%.2f", v)
 }

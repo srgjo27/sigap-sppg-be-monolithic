@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -238,4 +239,97 @@ func (h *Handler) GetKebutuhan(c *gin.Context) {
 		Items: res.Items,
 	}
 	c.JSON(http.StatusOK, toKebutuhanResponse(domainRes))
+}
+
+// CreatePurchaseOrder handles POST /api/v1/purchase-orders
+func (h *Handler) CreatePurchaseOrder(c *gin.Context) {
+	var req CreatePORequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		MapError(c, &domain.ValidationError{Fields: map[string]string{"body": "invalid JSON"}})
+		return
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	items := make([]domain.POItemInput, len(req.Items))
+	for i, item := range req.Items {
+		items[i] = domain.POItemInput{
+			BahanID:     item.BahanID,
+			QtyPesan:    item.QtyPesan,
+			HargaSatuan: item.HargaSatuan,
+		}
+	}
+	in := domain.CreatePOInput{
+		PemasokID:       req.PemasokID,
+		TglKirimDiminta: req.TglKirimDiminta,
+		SiklusID:        req.SiklusID,
+		MenuIDs:         req.MenuIDs,
+		Catatan:         req.Catatan,
+		Items:           items,
+	}
+	res, err := h.svc.CreatePurchaseOrder(c.Request.Context(), claims, in, clientIP(c))
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, toPOCreateResponse(res))
+}
+
+// ListPurchaseOrders handles GET /api/v1/purchase-orders
+func (h *Handler) ListPurchaseOrders(c *gin.Context) {
+	claims, _ := authhttp.CurrentUser(c)
+	filter := domain.POFilter{}
+	// Parse status (comma-separated)
+	if v := c.Query("status"); v != "" {
+		filter.Status = strings.Split(v, ",")
+	}
+	if v := c.Query("pemasok_id"); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+			filter.PemasokID = &id
+		}
+	}
+	if v := c.Query("tgl_kirim_dari"); v != "" {
+		filter.TglKirimDari = &v
+	}
+	if v := c.Query("tgl_kirim_sampai"); v != "" {
+		filter.TglKirimSampai = &v
+	}
+	if v := c.Query("q"); v != "" {
+		filter.Q = &v
+	}
+	if v := c.Query("sppg_id"); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+			filter.SPPGID = &id
+		}
+	}
+	if v := c.Query("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			filter.Page = n
+		}
+	}
+	if v := c.Query("per_page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			filter.Limit = n
+		}
+	}
+	res, err := h.svc.ListPurchaseOrders(c.Request.Context(), claims, filter)
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toPOListResponse(res))
+}
+
+// GetPurchaseOrder handles GET /api/v1/purchase-orders/{id}
+func (h *Handler) GetPurchaseOrder(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrPONotFound)
+		return
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	res, err := h.svc.GetPurchaseOrder(c.Request.Context(), claims, id)
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toPODetailResponse(res.Detail))
 }

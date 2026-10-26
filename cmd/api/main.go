@@ -49,6 +49,7 @@ func main() {
 		pengadaanPemasok pengadaanapplication.PemasokRepository
 		pengadaanBahan   pengadaanapplication.BahanRepository
 		pengadaanMenus   pengadaanapplication.MenuRepository
+		pengadaanSiklus  pengadaanapplication.SiklusRepository
 		pengadaanPO      pengadaanapplication.PurchaseOrderRepository
 		pengadaanSPPG    pengadaanapplication.SPPGProvider
 		pengadaanAudit   pengadaanapplication.AuditRepository
@@ -79,6 +80,7 @@ func main() {
 		pengadaanPemasok = pengadaaninfrastructure.NewPemasokPostgres(pool)
 		pengadaanBahan = pengadaaninfrastructure.NewBahanPostgres(pool)
 		pengadaanMenus = pengadaaninfrastructure.NewMenuPostgres(pool)
+		pengadaanSiklus = pengadaaninfrastructure.NewSiklusPostgres(pool)
 		pengadaanPO = pengadaaninfrastructure.NewPurchaseOrderPostgres(pool)
 		pengadaanSPPG = pengadaaninfrastructure.NewSPPGPostgres(pool)
 		pengadaanAudit = pengadaaninfrastructure.NewAuditPostgres(pool)
@@ -121,7 +123,7 @@ func main() {
 	menuHandler := menuhttp.NewHandler(menuSvc)
 
 	pengadaanSvc := pengadaanapplication.New(pengadaanapplication.Deps{
-		Pemasok: pengadaanPemasok, Bahan: pengadaanBahan, Menus: pengadaanMenus, PO: pengadaanPO,
+		Pemasok: pengadaanPemasok, Bahan: pengadaanBahan, Menus: pengadaanMenus, Siklus: pengadaanSiklus, PO: pengadaanPO,
 		SPPG: pengadaanSPPG, Audits: pengadaanAudit, Notifs: pengadaanNotifs,
 	})
 	pengadaanHandler := pengadaanhttp.NewHandler(pengadaanSvc)
