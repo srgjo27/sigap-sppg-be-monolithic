@@ -116,7 +116,7 @@ func ValidateNoHP(noHP string) (string, bool) {
 	return "", false
 }
 
-// ValidateCreatePemasok enforces MVP-003.1 rules without database access.
+// ValidateCreatePemasok enforces rules without database access.
 func ValidateCreatePemasok(in CreatePemasokInput) error {
 	fields := map[string]string{}
 	nama := strings.TrimSpace(in.Nama)

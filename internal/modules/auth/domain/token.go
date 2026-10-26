@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	// AccessTokenTTL is 15 minutes per MVP-001 general rules.
+	// AccessTokenTTL is 15 minutes per general rules.
 	AccessTokenTTL = 15 * time.Minute
-	// RefreshTokenTTL is 7 days per MVP-001 general rules.
+	// RefreshTokenTTL is 7 days per general rules.
 	RefreshTokenTTL = 7 * 24 * time.Hour
 )
 

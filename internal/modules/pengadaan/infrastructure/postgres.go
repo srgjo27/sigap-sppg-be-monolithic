@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -648,7 +650,7 @@ func (p *PurchaseOrderPostgres) Create(ctx context.Context, po *domain.PurchaseO
 	createdPO, err := scanPO(row)
 	if err != nil {
 		if isUniqueViolation(err) {
-			return nil, nil, domain.ErrPONotFound // or custom error for duplicate nomor_po
+			return nil, nil, domain.ErrPONumberConflict
 		}
 		return nil, nil, fmt.Errorf("insert purchase_order: %w", err)
 	}
@@ -684,6 +686,154 @@ func (p *PurchaseOrderPostgres) Create(ctx context.Context, po *domain.PurchaseO
 	}
 
 	return createdPO, createdItems, nil
+}
+
+// Update replaces PO header fields and, when replaceItems/replaceMenus are
+// set, the whole po_item / po_menu sets in a single transaction
+// The status guard re-checks 'draf' inside the transaction.
+func (p *PurchaseOrderPostgres) Update(ctx context.Context, po *domain.PurchaseOrder, items []domain.POItem, replaceItems bool, menuIDs []int64, replaceMenus bool) (*domain.PurchaseOrder, []domain.POItem, error) {
+	tx, err := p.Pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const poQ = `UPDATE purchase_order SET pemasok_id=$2, siklus_id=$3, tgl_kirim_diminta=$4, catatan=$5, updated_at=now()
+		WHERE id=$1 AND status='draf' RETURNING ` + poColumns
+	var siklusID any
+	if po.SiklusID != nil {
+		siklusID = *po.SiklusID
+	}
+	var tglKirim any
+	if po.TglKirimDiminta != nil {
+		tglKirim = *po.TglKirimDiminta
+	}
+	var catatan any
+	if po.Catatan != nil {
+		catatan = *po.Catatan
+	}
+	row := tx.QueryRow(ctx, poQ, po.ID, po.PemasokID, siklusID, tglKirim, catatan)
+	updatedPO, err := scanPO(row)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, nil, domain.ErrPOInvalidStatus
+		}
+		return nil, nil, fmt.Errorf("update purchase_order: %w", err)
+	}
+
+	var updatedItems []domain.POItem
+	if replaceItems {
+		if _, err := tx.Exec(ctx, `DELETE FROM po_item WHERE po_id=$1`, po.ID); err != nil {
+			return nil, nil, fmt.Errorf("reset po_item: %w", err)
+		}
+		updatedItems = make([]domain.POItem, 0, len(items))
+		for _, item := range items {
+			const itemQ = `INSERT INTO po_item (po_id, bahan_id, qty_pesan, harga_satuan) VALUES ($1,$2,$3,$4) RETURNING ` + poItemColumns
+			createdItem, err := scanPOItem(tx.QueryRow(ctx, itemQ, po.ID, item.BahanID, item.QtyPesan, item.HargaSatuan))
+			if err != nil {
+				if isUniqueViolation(err) {
+					return nil, nil, domain.ErrItemDuplicate
+				}
+				return nil, nil, fmt.Errorf("insert po_item: %w", err)
+			}
+			updatedItems = append(updatedItems, *createdItem)
+		}
+	}
+
+	if replaceMenus {
+		if _, err := tx.Exec(ctx, `DELETE FROM po_menu WHERE po_id=$1`, po.ID); err != nil {
+			return nil, nil, fmt.Errorf("reset po_menu: %w", err)
+		}
+		for _, menuID := range menuIDs {
+			const menuQ = `INSERT INTO po_menu (po_id, menu_id) VALUES ($1,$2)`
+			if _, err := tx.Exec(ctx, menuQ, po.ID, menuID); err != nil {
+				if isForeignKeyViolation(err) {
+					return nil, nil, domain.ErrMenuNotFound
+				}
+				return nil, nil, fmt.Errorf("insert po_menu: %w", err)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, fmt.Errorf("commit po update: %w", err)
+	}
+	return updatedPO, updatedItems, nil
+}
+
+// Delete removes a draft PO; po_item and po_menu rows cascade.
+func (p *PurchaseOrderPostgres) Delete(ctx context.Context, id int64) error {
+	tag, err := p.Pool.Exec(ctx, `DELETE FROM purchase_order WHERE id=$1 AND status='draf'`, id)
+	if err != nil {
+		return fmt.Errorf("delete po: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrPOInvalidStatus
+	}
+	return nil
+}
+
+// ListMenuIDsForPO returns menu ids linked to a PO.
+func (p *PurchaseOrderPostgres) ListMenuIDsForPO(ctx context.Context, poID int64) ([]int64, error) {
+	rows, err := p.Pool.Query(ctx, `SELECT menu_id FROM po_menu WHERE po_id=$1 ORDER BY menu_id ASC`, poID)
+	if err != nil {
+		return nil, fmt.Errorf("list po menus for po: %w", err)
+	}
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var menuID int64
+		if err := rows.Scan(&menuID); err != nil {
+			return nil, fmt.Errorf("scan po menu: %w", err)
+		}
+		out = append(out, menuID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows po menus: %w", err)
+	}
+	return out, nil
+}
+
+// HasPenerimaan reports whether the PO has at least one receipt lot.
+func (p *PurchaseOrderPostgres) HasPenerimaan(ctx context.Context, poID int64) (bool, error) {
+	const q = `SELECT EXISTS(
+		SELECT 1 FROM penerimaan_bahan pb JOIN po_item pi ON pi.id = pb.po_item_id WHERE pi.po_id = $1)`
+	var exists bool
+	if err := p.Pool.QueryRow(ctx, q, poID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check penerimaan: %w", err)
+	}
+	return exists, nil
+}
+
+// SetDikirim moves draf -> dikirim and stamps the sender, guarded on status.
+func (p *PurchaseOrderPostgres) SetDikirim(ctx context.Context, id int64, userID int64, at time.Time) (*domain.PurchaseOrder, error) {
+	const q = `UPDATE purchase_order SET status='dikirim', dikirim_oleh=$2, dikirim_at=$3, updated_at=now()
+		WHERE id=$1 AND status='draf' RETURNING ` + poColumns
+	row := p.Pool.QueryRow(ctx, q, id, userID, at)
+	po, err := scanPO(row)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, domain.ErrPOInvalidStatus
+		}
+		return nil, fmt.Errorf("set po dikirim: %w", err)
+	}
+	return po, nil
+}
+
+// SetStatus moves fromStatus -> toStatus and stamps ditutup_* columns,
+// guarded on the current status to prevent concurrent transitions.
+func (p *PurchaseOrderPostgres) SetStatus(ctx context.Context, id int64, fromStatus, toStatus string, userID int64, alasan *string, at time.Time) (*domain.PurchaseOrder, error) {
+	const q = `UPDATE purchase_order SET status=$3::po_status, ditutup_oleh=$4, ditutup_at=$5, alasan_tutup=$6, updated_at=now()
+		WHERE id=$1 AND status=$2::po_status RETURNING ` + poColumns
+	row := p.Pool.QueryRow(ctx, q, id, fromStatus, toStatus, userID, at, nullableStr(alasan))
+	po, err := scanPO(row)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, domain.ErrPOInvalidStatus
+		}
+		return nil, fmt.Errorf("set po status: %w", err)
+	}
+	return po, nil
 }
 
 // FindByID looks up a purchase order by ID.
@@ -967,15 +1117,69 @@ func (p *PurchaseOrderPostgres) GetPOItemRekap(ctx context.Context, poItemIDs []
 	return out, nil
 }
 
-// Exec executes a query without returning rows (for advisory lock).
-func (p *PurchaseOrderPostgres) Exec(ctx context.Context, query string, args ...any) error {
-	_, err := p.Pool.Exec(ctx, query, args...)
-	return err
+// ReserveNumberSeq reserves the next PO number sequence for the SPPG and
+// month inside a single transaction guarded by a transaction-scoped advisory
+// lock. The next value is the highest currently reserved or still attached
+// to any PO, + 1, so numbers of deleted POs are never reused.
+// Sequence selection and reservation commit together, so a failed allocation
+// releases its number. A rare conflict after the lock (e.g. rows inserted
+// outside this flow) is retried; exhaustion yields ErrPONumberConflict.
+func (p *PurchaseOrderPostgres) ReserveNumberSeq(ctx context.Context, sppgID int64, tahunBulan string) (int, error) {
+	ym, err := strconv.Atoi(tahunBulan)
+	if err != nil {
+		return 0, fmt.Errorf("reserve po number: parse tahun_bulan %q: %w", tahunBulan, err)
+	}
+
+	for attempt := 0; attempt < 3; attempt++ {
+		seq, err := p.reserveNumberOnce(ctx, sppgID, int64(ym), tahunBulan)
+		if err == nil {
+			return seq, nil
+		}
+		if !isUniqueViolation(err) {
+			return 0, fmt.Errorf("reserve po number: %w", err)
+		}
+	}
+	return 0, fmt.Errorf("reserve po number: %w", domain.ErrPONumberConflict)
 }
 
-// QueryRow executes a query that returns at most one row (for sequence number).
-func (p *PurchaseOrderPostgres) QueryRow(ctx context.Context, query string, args ...any) interface{ Scan(dest ...any) error } {
-	return p.Pool.QueryRow(ctx, query, args...)
+// reserveNumberOnce allocates one sequence number attempt inside a
+// transaction; the deferred rollback discards everything on failure, which
+// also releases the transaction-scoped advisory lock.
+func (p *PurchaseOrderPostgres) reserveNumberOnce(ctx context.Context, sppgID, ym int64, tahunBulan string) (int, error) {
+	tx, err := p.Pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Serialize concurrent issuances for the same SPPG and month.
+	const lockQ = `SELECT pg_advisory_xact_lock($1)`
+	lockKey := sppgID*1_000_000 + ym
+	if _, err := tx.Exec(ctx, lockQ, lockKey); err != nil {
+		return 0, fmt.Errorf("advisory lock: %w", err)
+	}
+
+	const seqQ = `
+		SELECT COALESCE(GREATEST(
+			(SELECT COALESCE(MAX(urut), 0) FROM po_nomor_terpakai WHERE sppg_id=$1 AND tahun_bulan=$2),
+			(SELECT COALESCE(MAX(CAST(SUBSTRING(nomor_po FROM '(\d+)$') AS INT)), 0)
+				FROM purchase_order WHERE sppg_id=$1 AND nomor_po LIKE $3)
+		), 0) + 1`
+	prefixLike := fmt.Sprintf("PO/%%/%s/%%", tahunBulan)
+
+	var seq int
+	if err := tx.QueryRow(ctx, seqQ, sppgID, tahunBulan, prefixLike).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("get sequence: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `INSERT INTO po_nomor_terpakai (sppg_id, tahun_bulan, urut) VALUES ($1, $2, $3)`, sppgID, tahunBulan, seq); err != nil {
+		return 0, fmt.Errorf("insert reservation: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit po number reservation: %w", err)
+	}
+	return seq, nil
 }
 
 // SPPGPostgres implements SPPGProvider
@@ -1120,10 +1324,7 @@ func nullableStr(p *string) any {
 }
 
 func isNoRows(err error) bool {
-	if err == nil {
-		return false
-	}
-	return err.Error() == "no rows in result set"
+	return errors.Is(err, pgx.ErrNoRows)
 }
 
 func isUniqueViolation(err error) bool {

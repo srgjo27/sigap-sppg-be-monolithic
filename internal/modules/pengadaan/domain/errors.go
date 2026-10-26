@@ -30,6 +30,8 @@ var (
 	ErrLotUsedInBatch      = errors.New("lot already used in production batch")
 	ErrSelfCorrection      = errors.New("cannot correct own receipt")
 	ErrCorrectionViolates  = errors.New("correction violates receipt rules")
+	ErrPOCannotBeSent      = errors.New("purchase order cannot be sent (no items, past delivery date)")
+	ErrPONumberConflict    = errors.New("purchase order number conflict")
 	ErrSPPGNotFound        = errors.New("sppg not found")
 )
 

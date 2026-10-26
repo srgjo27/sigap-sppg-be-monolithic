@@ -40,10 +40,10 @@ func (s *Service) CreatePurchaseOrder(ctx context.Context, actor *authdomain.Cla
 	}
 
 	now := s.clock()
-	today := now.Truncate(24 * time.Hour)
+	today := startOfDay(now)
 
 	// Validate input
-	if err := domain.ValidateCreatePOInput(in); err != nil {
+	if err := domain.ValidateCreatePOInput(in, today); err != nil {
 		return nil, err
 	}
 
@@ -54,81 +54,30 @@ func (s *Service) CreatePurchaseOrder(ctx context.Context, actor *authdomain.Cla
 	}
 
 	// Check pemasok exists, active, and belongs to same SPPG
-	pemasok, err := s.pemasok.FindByID(ctx, in.PemasokID)
-	if err != nil {
-		return nil, fmt.Errorf("find pemasok: %w", err)
-	}
-	if pemasok == nil {
-		return nil, domain.ErrPemasokNotFound
-	}
-	if pemasok.SPPGID != *actor.SPPGID {
-		return nil, domain.ErrPemasokNotFound
-	}
-	if !pemasok.Aktif {
-		return nil, domain.ErrPemasokInactive
+	if err := s.checkPemasokForPO(ctx, *actor.SPPGID, in.PemasokID); err != nil {
+		return nil, err
 	}
 
 	// Check siklus if provided
 	if in.SiklusID != nil {
-		siklus, err := s.siklus.FindByID(ctx, *in.SiklusID)
-		if err != nil {
-			return nil, fmt.Errorf("find siklus: %w", err)
-		}
-		if siklus == nil {
-			return nil, domain.ErrSiklusNotFound
-		}
-		if siklus.SPPGID != *actor.SPPGID {
-			return nil, domain.ErrSiklusNotFound
-		}
-		if siklus.Status == domain.SiklusStatusDitutup {
-			return nil, domain.ErrSiklusClosed
+		if err := s.checkSiklusForPO(ctx, *actor.SPPGID, *in.SiklusID); err != nil {
+			return nil, err
 		}
 	}
 
 	// Check menus if provided
 	var menuIDs []int64
 	if len(in.MenuIDs) > 0 {
-		menus, err := s.menus.FindByIDs(ctx, in.MenuIDs)
-		if err != nil {
-			return nil, fmt.Errorf("find menus: %w", err)
-		}
-		if len(menus) != len(in.MenuIDs) {
-			return nil, domain.ErrMenuNotFound
-		}
-		for _, m := range menus {
-			if m.SPPGID != *actor.SPPGID {
-				return nil, domain.ErrMenuNotFound
-			}
-			if m.Status != domain.MenuStatusDisetujui {
-				return nil, domain.ErrMenuNotApproved
-			}
+		if err := s.checkMenusForPO(ctx, *actor.SPPGID, in.MenuIDs); err != nil {
+			return nil, err
 		}
 		menuIDs = in.MenuIDs
 	}
 
 	// Check bahan for each item and build POItems
-	poItems := make([]domain.POItem, 0, len(in.Items))
-	for _, item := range in.Items {
-		bahan, err := s.bahan.FindByID(ctx, item.BahanID)
-		if err != nil {
-			return nil, fmt.Errorf("find bahan: %w", err)
-		}
-		if bahan == nil {
-			return nil, domain.ErrBahanNotFound
-		}
-		if !bahan.Aktif {
-			return nil, domain.ErrBahanInactive
-		}
-		// Validate qty for satuan
-		if err := domain.ValidateSatuanForQty(bahan.Satuan, item.QtyPesan); err != nil {
-			return nil, err
-		}
-
-		poItems = append(poItems, domain.POItem{
-			BahanID:     item.BahanID,
-			QtyPesan:    item.QtyPesan,
-			HargaSatuan: item.HargaSatuan,
-		})
+	poItems, err := s.validateBuildPOItems(ctx, in.Items)
+	if err != nil {
+		return nil, err
 	}
 
 	// Generate PO number
@@ -179,30 +128,16 @@ func (s *Service) CreatePurchaseOrder(ctx context.Context, actor *authdomain.Cla
 	return &POCreateResult{PO: createdPO, Items: createdItems, Warnings: warnings}, nil
 }
 
-// generatePONumber generates PO number: PO/{kode_sppg}/{YYYYMM}/{urut 4 digit}
+// generatePONumber generates PO number: PO/{kode_sppg}/{YYYYMM}/{urut 4 digit}.
+// The transactional reservation (ReserveNumberSeq) guarantees that numbers of
+// deleted POs are never reused and concurrent issuances serialize.
 func (s *Service) generatePONumber(ctx context.Context, sppgID int64, sppgKode string, tglKirimDiminta time.Time) (string, error) {
 	yearMonth := tglKirimDiminta.Format("200601")
-	prefix := fmt.Sprintf("PO/%s/%s/", sppgKode, yearMonth)
-
-	// Use advisory lock to prevent race conditions
-	lockKey := sppgID*10000 + int64(tglKirimDiminta.Year()*100+int(tglKirimDiminta.Month()))
-	err := s.po.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, lockKey)
+	seq, err := s.po.ReserveNumberSeq(ctx, sppgID, yearMonth)
 	if err != nil {
-		return "", fmt.Errorf("advisory lock: %w", err)
+		return "", fmt.Errorf("generate PO number: %w", err)
 	}
-
-	// Get the next sequence number
-	var seq int
-	err = s.po.QueryRow(ctx, `
-		SELECT COALESCE(MAX(CAST(SUBSTRING(nomor_po FROM 'PO/[^/]+/\d+/(\d{4})') AS INT)), 0) + 1
-		FROM purchase_order
-		WHERE nomor_po LIKE $1
-	`, prefix+"%").Scan(&seq)
-	if err != nil {
-		return "", fmt.Errorf("get sequence: %w", err)
-	}
-
-	return fmt.Sprintf("%s%04d", prefix, seq), nil
+	return fmt.Sprintf("PO/%s/%s/%04d", sppgKode, yearMonth, seq), nil
 }
 
 // bahanItems creates a map of bahan_id -> bahan for warnings
@@ -353,7 +288,7 @@ func (s *Service) ListPurchaseOrders(ctx context.Context, actor *authdomain.Clai
 
 	// Add terlambat flag
 	now := s.clock()
-	today := now.Truncate(24 * time.Hour)
+	today := startOfDay(now)
 	for i := range items {
 		if (items[i].Status == domain.POStatusDikirim || items[i].Status == domain.POStatusDiterimaSebagian) &&
 			items[i].TglKirimDiminta != nil && items[i].TglKirimDiminta.Before(today) {

@@ -159,7 +159,7 @@ func (p *Postgres) CountActiveKepala(ctx context.Context, sppgID int64, excludeI
 	return n, nil
 }
 
-// userListOrder maps an allowlisted sort key to ORDER BY (MVP-002.8).
+// userListOrder maps an allowlisted sort key to ORDER BY.
 func userListOrder(sort string) string {
 	switch sort {
 	case domain.UserSortMinusCreated:
@@ -171,7 +171,7 @@ func userListOrder(sort string) string {
 	}
 }
 
-// ListUsers returns paginated users for GET /users (MVP-002.8).
+// ListUsers returns paginated users for GET /users.
 func (p *Postgres) ListUsers(ctx context.Context, filter domain.UserFilter, scope domain.UserScope) ([]domain.User, int, error) {
 	filter.Normalize()
 	where := `WHERE ($1::text IS NULL OR lower(nama) LIKE '%'||lower($1)||'%' OR lower(email) LIKE '%'||lower($1)||'%')` +
@@ -227,7 +227,7 @@ func (p *Postgres) ListUsers(ctx context.Context, filter domain.UserFilter, scop
 	return out, total, nil
 }
 
-// CountActiveSessions counts usable refresh tokens (MVP-002.8 detail).
+// CountActiveSessions counts usable refresh tokens (detail).
 func (p *Postgres) CountActiveSessions(ctx context.Context, userID int64, now time.Time) (int, error) {
 	const q = `SELECT COUNT(*) FROM refresh_token WHERE user_id=$1 AND revoked_at IS NULL AND expires_at > $2`
 	var n int

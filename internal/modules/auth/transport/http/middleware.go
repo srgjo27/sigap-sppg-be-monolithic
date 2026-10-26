@@ -24,7 +24,7 @@ type Middleware struct {
 }
 
 // NewMiddleware builds transport middleware.
-// The service is required for the wajib_ganti_password gate (MVP-001.6).
+// The service is required for the wajib_ganti_password gate.
 func NewMiddleware(tokens application.TokenIssuer, svc *application.Service) *Middleware {
 	return &Middleware{tokens: tokens, svc: svc, attempt: map[string][]time.Time{}, now: time.Now}
 }
@@ -39,7 +39,7 @@ func CurrentUser(c *gin.Context) (*domain.Claims, bool) {
 	return claims, ok
 }
 
-// Authenticate validates Bearer JWT (MVP-001.8).
+// Authenticate validates Bearer JWT.
 func (m *Middleware) Authenticate() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
@@ -58,7 +58,7 @@ func (m *Middleware) Authenticate() gin.HandlerFunc {
 	}
 }
 
-// RequireRoles denies roles outside the allowlist (MVP-001.8).
+// RequireRoles denies roles outside the allowlist.
 // Denials are written to audit_log with aksi DENY.
 func (m *Middleware) RequireRoles(allowed ...domain.Role) gin.HandlerFunc {
 	set := map[domain.Role]bool{}
@@ -80,7 +80,7 @@ func (m *Middleware) RequireRoles(allowed ...domain.Role) gin.HandlerFunc {
 	}
 }
 
-// PengawasReadOnly enforces read-only access for pengawas (MVP-001.8):
+// PengawasReadOnly enforces read-only access for pengawas:
 // any non-GET request by pengawas is denied and logged.
 func (m *Middleware) PengawasReadOnly() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -99,7 +99,7 @@ func (m *Middleware) PengawasReadOnly() gin.HandlerFunc {
 }
 
 // RequirePasswordChanged blocks callers that must change their password
-// first (MVP-001.6). Exempt endpoints (me, logout, password) do not use it.
+// first. Exempt endpoints (me, logout, password) do not use it.
 func (m *Middleware) RequirePasswordChanged() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, ok := CurrentUser(c)
@@ -126,7 +126,7 @@ func (m *Middleware) RequirePasswordChanged() gin.HandlerFunc {
 	}
 }
 
-// logDeny records a 403 denial (MVP-001.8, aksi DENY). Best-effort.
+// logDeny records a 403 denial (aksi DENY). Best-effort.
 func (m *Middleware) logDeny(c *gin.Context, claims *domain.Claims, reason string) {
 	if m.svc == nil || claims == nil {
 		return
@@ -135,7 +135,7 @@ func (m *Middleware) logDeny(c *gin.Context, claims *domain.Claims, reason strin
 	m.svc.LogDenial(c.Request.Context(), &claims.UserID, reason+" "+c.Request.Method+" "+c.FullPath(), ip)
 }
 
-// RateLimitLogin enforces 10 attempts/minute/IP on login (MVP-001.2).
+// RateLimitLogin enforces 10 attempts/minute/IP on login.
 func (m *Middleware) RateLimitLogin() gin.HandlerFunc {
 	const limit = 10
 	const window = time.Minute

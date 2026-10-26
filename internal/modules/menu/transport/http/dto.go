@@ -92,7 +92,7 @@ type MenuBahanResponse struct {
 	GramPerPorsi float64 `json:"gram_per_porsi,omitempty"`
 }
 
-// CreateMenuResponse is the MVP-002.2 success payload.
+// CreateMenuResponse is success payload.
 type CreateMenuResponse struct {
 	ID          int64               `json:"id"`
 	Tanggal     string              `json:"tanggal"`
@@ -150,13 +150,13 @@ type MenuListMeta struct {
 	TanggalKosong []string `json:"tanggal_kosong"`
 }
 
-// MenuListResponse is the MVP-002.3 list payload.
+// MenuListResponse is the list payload.
 type MenuListResponse struct {
 	Data []MenuListItemResponse `json:"data"`
 	Meta MenuListMeta           `json:"meta"`
 }
 
-// MenuDetailResponse is the MVP-002.3 detail payload.
+// MenuDetailResponse is the detail payload.
 type MenuDetailResponse struct {
 	ID            int64               `json:"id"`
 	Tanggal       string              `json:"tanggal"`
@@ -232,7 +232,7 @@ type RevertRequest struct {
 	Alasan string `json:"alasan"`
 }
 
-// ApprovalResponse is the MVP-002.5 success payload (menu with new status).
+// ApprovalResponse is success payload (menu with new status).
 type ApprovalResponse struct {
 	ID            int64               `json:"id"`
 	Tanggal       string              `json:"tanggal"`
@@ -267,7 +267,7 @@ type KebutuhanItemResponse struct {
 	MudahRusak   bool    `json:"mudah_rusak"`
 }
 
-// KebutuhanResponse is the MVP-002.6 success payload.
+// KebutuhanResponse is success payload.
 type KebutuhanResponse struct {
 	Menu           KebutuhanMenuRef        `json:"menu"`
 	TargetPorsi    int                     `json:"target_porsi"`
@@ -311,7 +311,7 @@ type CopyMenuRequest struct {
 	TanggalTujuan []string `json:"tanggal_tujuan"`
 }
 
-// CopyMenuResponse is the MVP-002.7 success payload.
+// CopyMenuResponse is success payload.
 type CopyMenuResponse struct {
 	Data     []CreateMenuResponse `json:"data"`
 	Warnings []string             `json:"warnings"`

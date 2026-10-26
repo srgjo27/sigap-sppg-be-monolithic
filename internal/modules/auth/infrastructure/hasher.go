@@ -7,7 +7,7 @@ import (
 )
 
 // BcryptHasher hashes passwords with bcrypt. Cost must be >= 12 in production
-// per MVP-001 general rules; tests may inject a lower cost.
+// per general rules; tests may inject a lower cost.
 type BcryptHasher struct {
 	Cost int
 }

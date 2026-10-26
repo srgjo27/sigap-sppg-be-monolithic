@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -167,7 +168,7 @@ const (
 	SiklusStatusDitutup    = "ditutup"
 )
 
-// ===== MVP-003.3 & MVP-003.4: Purchase Order types =====
+// ===== Purchase Order types =====
 
 // POItemInput is the input for a PO item.
 type POItemInput struct {
@@ -184,6 +185,21 @@ type CreatePOInput struct {
 	MenuIDs         []int64       `json:"menu_ids,omitempty"`
 	Catatan         string        `json:"catatan"`
 	Items           []POItemInput `json:"items"`
+}
+
+// UpdatePOInput is the PATCH input. All fields optional;
+// absent keys keep current values. ItemsSet/MenuIDsSet/SiklusIDSet mark key
+// presence so `[]`/`null` can clear a list/link.
+type UpdatePOInput struct {
+	PemasokID       *int64
+	TglKirimDiminta *string // YYYY-MM-DD
+	SiklusID        *int64
+	SiklusIDSet     bool
+	MenuIDs         []int64
+	MenuIDsSet      bool
+	Catatan         *string
+	Items           []POItemInput
+	ItemsSet        bool
 }
 
 // POFilter scopes GET /purchase-orders.
@@ -291,8 +307,39 @@ type POCreateResult struct {
 	Warnings []string
 }
 
-// ValidateCreatePOInput validates the create PO input.
-func ValidateCreatePOInput(in CreatePOInput) error {
+// ValidateUpdatePOInput checks the PATCH envelope shape.
+// Field-level rules are re-run on the merged input with updated rules.
+func ValidateUpdatePOInput(in UpdatePOInput) error {
+	fields := map[string]string{}
+	for _, item := range in.Items {
+		if item.BahanID <= 0 {
+			fields["items"] = "bahan_id is required for all items"
+			break
+		}
+		if item.QtyPesan <= 0 {
+			fields["items"] = "qty_pesan must be > 0"
+			break
+		}
+		if item.HargaSatuan <= 0 || item.HargaSatuan > 100000000 {
+			fields["items"] = "harga_satuan must be > 0 and <= 100000000"
+			break
+		}
+	}
+	if in.TglKirimDiminta != nil {
+		if _, err := time.Parse("2006-01-02", strings.TrimSpace(*in.TglKirimDiminta)); err != nil {
+			fields["tgl_kirim_diminta"] = "use YYYY-MM-DD"
+		}
+	}
+	if len(fields) > 0 {
+		return &ValidationError{Fields: fields}
+	}
+	return nil
+}
+
+// ValidateCreatePOInput validates the create PO input. today must be the
+// caller's "truncated to day" clock value so tests and day-boundary semantics
+// stay deterministic.
+func ValidateCreatePOInput(in CreatePOInput, today time.Time) error {
 	fields := map[string]string{}
 	if in.PemasokID <= 0 {
 		fields["pemasok_id"] = "required"
@@ -303,7 +350,7 @@ func ValidateCreatePOInput(in CreatePOInput) error {
 		t, err := time.Parse("2006-01-02", in.TglKirimDiminta)
 		if err != nil {
 			fields["tgl_kirim_diminta"] = "use YYYY-MM-DD"
-		} else if t.Before(time.Now().Truncate(24 * time.Hour)) {
+		} else if t.Before(today) {
 			fields["tgl_kirim_diminta"] = "cannot be before today"
 		}
 	}
@@ -375,6 +422,15 @@ func ValidatePOFilter(f POFilter) error {
 	}
 	if len(fields) > 0 {
 		return &ValidationError{Fields: fields}
+	}
+	return nil
+}
+
+// ValidateAlasan checks a mandatory reason's trimmed length (min..max inclusive).
+func ValidateAlasan(field, alasan string, min, max int) error {
+	trimmed := strings.TrimSpace(alasan)
+	if len([]rune(trimmed)) < min || len([]rune(trimmed)) > max {
+		return &ValidationError{Fields: map[string]string{field: fmt.Sprintf("must be %d-%d characters", min, max)}}
 	}
 	return nil
 }

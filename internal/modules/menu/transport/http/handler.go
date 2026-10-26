@@ -32,7 +32,7 @@ func clientIP(c *gin.Context) *string {
 	return &ip
 }
 
-// CreateBahan handles POST /bahan (MVP-002.1).
+// CreateBahan handles POST /bahan.
 func (h *Handler) CreateBahan(c *gin.Context) {
 	var req CreateBahanRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -55,7 +55,7 @@ func (h *Handler) CreateBahan(c *gin.Context) {
 	c.JSON(http.StatusCreated, toBahanResponse(res))
 }
 
-// UpdateBahan handles PATCH /bahan/:id (MVP-002.1).
+// UpdateBahan handles PATCH /bahan/:id.
 func (h *Handler) UpdateBahan(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -141,7 +141,7 @@ func (h *Handler) UpdateBahan(c *gin.Context) {
 	c.JSON(http.StatusOK, toBahanResponse(res))
 }
 
-// ListBahan handles GET /bahan?q=&kategori=&aktif= (MVP-002.1).
+// ListBahan handles GET /bahan?q=&kategori=&aktif=.
 func (h *Handler) ListBahan(c *gin.Context) {
 	claims, _ := authhttp.CurrentUser(c)
 	filter := domain.BahanFilter{}
@@ -182,7 +182,7 @@ func (h *Handler) ListBahan(c *gin.Context) {
 	c.JSON(http.StatusOK, BahanListResponse{Data: data, Meta: PageMeta{Page: filter.Page, PerPage: filter.Limit, Total: total}})
 }
 
-// CreateMenu handles POST /menus (MVP-002.2).
+// CreateMenu handles POST /menus.
 func (h *Handler) CreateMenu(c *gin.Context) {
 	var req CreateMenuRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -219,7 +219,7 @@ func (h *Handler) CreateMenu(c *gin.Context) {
 	c.JSON(http.StatusCreated, toCreateMenuResponse(res))
 }
 
-// ListMenus handles GET /menus (MVP-002.3).
+// ListMenus handles GET /menus.
 func (h *Handler) ListMenus(c *gin.Context) {
 	dariRaw := c.Query("dari")
 	sampaiRaw := c.Query("sampai")
@@ -259,7 +259,7 @@ func (h *Handler) ListMenus(c *gin.Context) {
 	c.JSON(http.StatusOK, toMenuListResponse(res, dariRaw, sampaiRaw))
 }
 
-// GetMenu handles GET /menus/:id (MVP-002.3).
+// GetMenu handles GET /menus/:id.
 func (h *Handler) GetMenu(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -275,7 +275,7 @@ func (h *Handler) GetMenu(c *gin.Context) {
 	c.JSON(http.StatusOK, toMenuDetailResponse(det))
 }
 
-// UpdateMenu handles PATCH /menus/:id (MVP-002.4).
+// UpdateMenu handles PATCH /menus/:id.
 func (h *Handler) UpdateMenu(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -374,7 +374,7 @@ func (h *Handler) UpdateMenu(c *gin.Context) {
 	c.JSON(http.StatusOK, toUpdateMenuResponse(res))
 }
 
-// DeleteMenu handles DELETE /menus/:id (MVP-002.4).
+// DeleteMenu handles DELETE /menus/:id.
 func (h *Handler) DeleteMenu(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -389,7 +389,7 @@ func (h *Handler) DeleteMenu(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// ApproveMenu handles POST /menus/:id/approve (MVP-002.5).
+// ApproveMenu handles POST /menus/:id/approve.
 func (h *Handler) ApproveMenu(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -405,7 +405,7 @@ func (h *Handler) ApproveMenu(c *gin.Context) {
 	c.JSON(http.StatusOK, toApprovalResponse(res))
 }
 
-// RevertMenu handles POST /menus/:id/revert (MVP-002.5).
+// RevertMenu handles POST /menus/:id/revert.
 func (h *Handler) RevertMenu(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -426,7 +426,7 @@ func (h *Handler) RevertMenu(c *gin.Context) {
 	c.JSON(http.StatusOK, toApprovalResponse(res))
 }
 
-// GetKebutuhan handles GET /menus/:id/kebutuhan-bahan (MVP-002.6).
+// GetKebutuhan handles GET /menus/:id/kebutuhan-bahan.
 func (h *Handler) GetKebutuhan(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -460,7 +460,7 @@ func (h *Handler) GetKebutuhan(c *gin.Context) {
 	c.JSON(http.StatusOK, toKebutuhanResponse(res))
 }
 
-// CopyMenu handles POST /menus/:id/copy (MVP-002.7).
+// CopyMenu handles POST /menus/:id/copy.
 func (h *Handler) CopyMenu(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {

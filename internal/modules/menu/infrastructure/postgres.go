@@ -197,7 +197,7 @@ func (p *Postgres) CreateMenu(ctx context.Context, menu *domain.Menu, items []do
 	return created, stored, nil
 }
 
-// CreateMenus stores several menus with items in one transaction (MVP-002.7).
+// CreateMenus stores several menus with items in one transaction.
 // Either all rows persist or none.
 func (p *Postgres) CreateMenus(ctx context.Context, menus []*domain.Menu, items [][]domain.MenuBahan) ([]*domain.Menu, [][]domain.MenuBahan, error) {
 	if len(menus) != len(items) {
@@ -218,7 +218,7 @@ func (p *Postgres) CreateMenus(ctx context.Context, menus []*domain.Menu, items 
 				return nil, nil, err
 			}
 			// A unique violation here means a target date collision (race
-			// with the service-level pre-check); name the date per MVP-002.7.
+			// with the service-level pre-check); name the date per.
 			if isUniqueViolation(err) {
 				return nil, nil, &domain.MenuDateConflictError{Tanggal: menu.Tanggal.Format("2006-01-02")}
 			}
@@ -514,7 +514,7 @@ func (p *Postgres) IsMenuUsed(ctx context.Context, menuID int64) (bool, error) {
 	return exists, nil
 }
 
-// SetApproval flips status plus approver columns atomically (MVP-002.5).
+// SetApproval flips status plus approver columns atomically.
 func (p *Postgres) SetApproval(ctx context.Context, id int64, status string, approver *int64, approvedAt *time.Time) (*domain.Menu, error) {
 	const q = `UPDATE menu SET status=$2, disetujui_oleh=$3, disetujui_at=$4, updated_at=now()
 		WHERE id=$1 RETURNING id, sppg_id, tanggal, nama_menu, energi_kkal, protein_g, karbohidrat_g, lemak_g, target_porsi, catatan, dibuat_oleh, status, disetujui_oleh, disetujui_at, created_at, updated_at`
@@ -529,7 +529,7 @@ func (p *Postgres) SetApproval(ctx context.Context, id int64, status string, app
 	return m, nil
 }
 
-// NotifySPPGRoles implements NotificationRepository (MVP-002.5).
+// NotifySPPGRoles implements NotificationRepository.
 func (p *Postgres) NotifySPPGRoles(ctx context.Context, sppgID int64, roles []string, jenis, judul, isi, refTabel string, refID int64) error {
 	const q = `INSERT INTO notifikasi (user_id, jenis, judul, isi, ref_tabel, ref_id)
 		SELECT id, $3, $4, $5, $6, $7 FROM users WHERE sppg_id=$1 AND peran = ANY($2) AND aktif`

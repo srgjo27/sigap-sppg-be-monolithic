@@ -42,7 +42,7 @@ func (f *testFixture) advance(d time.Duration) {
 }
 
 // clearWajib clears wajib_ganti_password so refresh flows can be tested
-// independently of the first-login gate (MVP-001.6).
+// independently of the first-login gate.
 func (f *testFixture) clearWajib(t *testing.T, userID int64) {
 	t.Helper()
 	u, err := f.stores.FindByID(context.Background(), userID)

@@ -14,7 +14,7 @@ import (
 // Clock abstracts time for tests.
 type Clock func() time.Time
 
-// Service orchestrates MVP-002.1 through MVP-002.6 use cases.
+// Service orchestrates use cases.
 type Service struct {
 	bahan   BahanRepository
 	menus   MenuRepository
@@ -44,8 +44,6 @@ func New(d Deps) *Service {
 	}
 	return &Service{bahan: d.Bahan, menus: d.Menus, sppg: d.SPPG, sekolah: d.Sekolah, audits: d.Audits, notifs: d.Notifs, clock: clock}
 }
-
-// --- MVP-002.1 ---
 
 // CreateBahan implements POST /bahan. Writers: admin, ahli_gizi.
 func (s *Service) CreateBahan(ctx context.Context, actor *authdomain.Claims, in domain.CreateBahanInput, ip *string) (*domain.Bahan, error) {
@@ -207,8 +205,6 @@ func (s *Service) ListBahan(ctx context.Context, actor *authdomain.Claims, filte
 	return items, total, nil
 }
 
-// --- MVP-002.2 ---
-
 // CreateMenuResult carries the created menu, its items, and warnings.
 type CreateMenuResult struct {
 	Menu     *domain.Menu
@@ -315,8 +311,6 @@ func (s *Service) CreateMenu(ctx context.Context, actor *authdomain.Claims, in d
 	return &CreateMenuResult{Menu: created, Items: createdItems, Warnings: warnings}, nil
 }
 
-// --- MVP-002.3 ---
-
 // MenuListResult carries list rows plus empty-date markers.
 type MenuListResult struct {
 	Items   []domain.Menu
@@ -325,7 +319,7 @@ type MenuListResult struct {
 }
 
 // ListMenus implements GET /menus. Every authenticated role may list;
-// scoping follows the MVP-002 matrix.
+// scoping follows the matrix.
 func (s *Service) ListMenus(ctx context.Context, actor *authdomain.Claims, filter domain.MenuFilter) (*MenuListResult, error) {
 	if actor == nil {
 		return nil, domain.ErrUnauthorized
@@ -457,8 +451,6 @@ func (s *Service) GetMenu(ctx context.Context, actor *authdomain.Claims, id int6
 	}
 	return &MenuDetail{Menu: m, Items: items, Redacted: redacted}, nil
 }
-
-// --- MVP-002.4 ---
 
 // UpdateMenuResult carries the updated menu and capacity warnings.
 type UpdateMenuResult struct {
@@ -627,8 +619,6 @@ func menuSnapshot(m *domain.Menu) map[string]any {
 	}
 }
 
-// --- MVP-002.7 ---
-
 // CopyMenuResult carries copied menus with their items plus warnings.
 type CopyMenuResult struct {
 	Menus    []*domain.Menu
@@ -760,8 +750,6 @@ func (s *Service) CopyMenu(ctx context.Context, actor *authdomain.Claims, source
 	return &CopyMenuResult{Menus: createdMenus, Items: createdItems, Warnings: warnings}, nil
 }
 
-// --- MVP-002.5 ---
-
 // ApprovalResult carries a menu with its composition after status change.
 type ApprovalResult struct {
 	Menu  *domain.Menu
@@ -881,8 +869,6 @@ func (s *Service) RevertMenu(ctx context.Context, actor *authdomain.Claims, id i
 	})
 	return &ApprovalResult{Menu: updated, Items: s.approvalDetail(ctx, updated)}, nil
 }
-
-// --- MVP-002.6 ---
 
 // KebutuhanItem is one computed row in GET kebutuhan-bahan.
 type KebutuhanItem struct {

@@ -396,6 +396,7 @@ ALTER TABLE purchase_order
   ADD CONSTRAINT chk_po_batal
     CHECK (status <> 'batal' OR alasan_tutup IS NOT NULL);
 CREATE INDEX idx_po_sppg_status ON purchase_order (sppg_id, status);
+
 CREATE INDEX idx_po_pemasok ON purchase_order (pemasok_id);
 
 -- Satu bahan hanya sekali per PO
@@ -408,6 +409,15 @@ CREATE TABLE po_menu (
   PRIMARY KEY (po_id, menu_id)
 );
 CREATE INDEX idx_po_menu_menu ON po_menu (menu_id);
+
+-- Reservasi nomor PO: setiap nomor yang pernah diterbitkan dicatat di sini
+-- sehingga nomor milik PO yang dihapus tidak pernah dipakai ulang.
+CREATE TABLE po_nomor_terpakai (
+  sppg_id BIGINT NOT NULL REFERENCES sppg(id),
+  tahun_bulan VARCHAR(6) NOT NULL,                      -- YYYYMM dari tgl kirim diminta
+  urut BIGINT NOT NULL CHECK (urut > 0),
+  PRIMARY KEY (sppg_id, tahun_bulan, urut)
+);
 
 -- Total PO selalu = jumlah subtotal item (dijaga database)
 CREATE OR REPLACE FUNCTION fn_po_hitung_total() RETURNS trigger AS $$

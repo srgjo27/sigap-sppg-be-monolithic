@@ -333,3 +333,172 @@ func (h *Handler) GetPurchaseOrder(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, toPODetailResponse(res.Detail))
 }
+
+// UpdatePurchaseOrder handles PATCH /api/v1/purchase-orders/{id}.
+// Field presence is detected on the raw JSON so PATCH keeps untouched fields.
+func (h *Handler) UpdatePurchaseOrder(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrPONotFound)
+		return
+	}
+	var raw map[string]json.RawMessage
+	if err := c.ShouldBindJSON(&raw); err != nil {
+		MapError(c, &domain.ValidationError{Fields: map[string]string{"body": "invalid JSON"}})
+		return
+	}
+
+	var in domain.UpdatePOInput
+	if v, ok := raw["pemasok_id"]; ok {
+		if string(v) == "null" {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"pemasok_id": "cannot be null"}})
+			return
+		}
+		if err := unmarshalRawMessage(v, &in.PemasokID); err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"pemasok_id": "must be an integer"}})
+			return
+		}
+	}
+	if v, ok := raw["tgl_kirim_diminta"]; ok {
+		if string(v) == "null" {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"tgl_kirim_diminta": "cannot be null"}})
+			return
+		}
+		var s string
+		if err := unmarshalRawMessage(v, &s); err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"tgl_kirim_diminta": "must be a string"}})
+			return
+		}
+		in.TglKirimDiminta = &s
+	}
+	if v, ok := raw["siklus_id"]; ok {
+		if string(v) != "null" {
+			if err := unmarshalRawMessage(v, &in.SiklusID); err != nil {
+				MapError(c, &domain.ValidationError{Fields: map[string]string{"siklus_id": "must be an integer"}})
+				return
+			}
+		}
+		in.SiklusIDSet = true
+	}
+	if v, ok := raw["menu_ids"]; ok {
+		if string(v) != "null" {
+			var ids []int64
+			if err := unmarshalRawMessage(v, &ids); err != nil {
+				MapError(c, &domain.ValidationError{Fields: map[string]string{"menu_ids": "must be an array of integers"}})
+				return
+			}
+			in.MenuIDs = ids
+		}
+		in.MenuIDsSet = true
+	}
+	if v, ok := raw["catatan"]; ok {
+		var s string
+		if string(v) == "null" {
+			s = ""
+		} else if err := unmarshalRawMessage(v, &s); err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"catatan": "must be a string"}})
+			return
+		}
+		in.Catatan = &s
+	}
+	if v, ok := raw["items"]; ok {
+		if string(v) != "null" {
+			var reqs []UpdatePOItemRequest
+			if err := unmarshalRawMessage(v, &reqs); err != nil {
+				MapError(c, &domain.ValidationError{Fields: map[string]string{"items": "must be an array of items"}})
+				return
+			}
+			items := make([]domain.POItemInput, len(reqs))
+			for i, r := range reqs {
+				items[i] = domain.POItemInput{BahanID: r.BahanID, QtyPesan: r.QtyPesan, HargaSatuan: r.HargaSatuan}
+			}
+			in.Items = items
+		}
+		in.ItemsSet = true
+	}
+
+	claims, _ := authhttp.CurrentUser(c)
+	res, err := h.svc.UpdatePurchaseOrder(c.Request.Context(), claims, id, in, clientIP(c))
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toPOTransitionResponse(res.Detail, res.Warnings, nil))
+}
+
+// DeletePurchaseOrder handles DELETE /api/v1/purchase-orders/{id}.
+func (h *Handler) DeletePurchaseOrder(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrPONotFound)
+		return
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	if err := h.svc.DeletePurchaseOrder(c.Request.Context(), claims, id, clientIP(c)); err != nil {
+		MapError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// KirimPurchaseOrder handles POST /api/v1/purchase-orders/{id}/kirim.
+func (h *Handler) KirimPurchaseOrder(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrPONotFound)
+		return
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	res, err := h.svc.KirimPurchaseOrder(c.Request.Context(), claims, id, clientIP(c))
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toPOTransitionResponse(res.Detail, nil, nil))
+}
+
+type POAlasanRequest struct {
+	Alasan string `json:"alasan" binding:"required"`
+}
+
+// BatalPurchaseOrder handles POST /api/v1/purchase-orders/{id}/batal.
+func (h *Handler) BatalPurchaseOrder(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrPONotFound)
+		return
+	}
+	var req POAlasanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		MapError(c, &domain.ValidationError{Fields: map[string]string{"alasan": "required"}})
+		return
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	res, err := h.svc.BatalPurchaseOrder(c.Request.Context(), claims, id, req.Alasan, clientIP(c))
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toPOTransitionResponse(res.Detail, nil, nil))
+}
+
+// TutupPurchaseOrder handles POST /api/v1/purchase-orders/{id}/tutup.
+func (h *Handler) TutupPurchaseOrder(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrPONotFound)
+		return
+	}
+	var req POAlasanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		MapError(c, &domain.ValidationError{Fields: map[string]string{"alasan": "required"}})
+		return
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	res, err := h.svc.TutupPurchaseOrder(c.Request.Context(), claims, id, req.Alasan, clientIP(c))
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toPOTransitionResponse(res.Detail, nil, res.ItemTidakTerpenuhi))
+}

@@ -342,6 +342,35 @@ type PODetailResponse struct {
 	Warnings        []string                     `json:"warnings,omitempty"`
 }
 
+// ===== PO update & transition DTOs =====
+
+type UpdatePOItemRequest struct {
+	BahanID     int64   `json:"bahan_id"`
+	QtyPesan    float64 `json:"qty_pesan"`
+	HargaSatuan float64 `json:"harga_satuan"`
+}
+
+type POTransitionResponse struct {
+	PODetailResponse
+	Warnings           []string         `json:"warnings,omitempty"`
+	ItemTidakTerpenuhi []POItemResponse `json:"item_tidak_terpenuhi,omitempty"`
+}
+
+func toPOTransitionResponse(detail *domain.PODetail, warnings []string, tidakTerpenuhi []domain.PODetailItem) POTransitionResponse {
+	resp := POTransitionResponse{PODetailResponse: toPODetailResponse(detail)}
+	if warnings != nil {
+		resp.Warnings = warnings
+	}
+	if tidakTerpenuhi != nil {
+		items := make([]POItemResponse, len(tidakTerpenuhi))
+		for i, it := range tidakTerpenuhi {
+			items[i] = toPOItemResponse(it)
+		}
+		resp.ItemTidakTerpenuhi = items
+	}
+	return resp
+}
+
 // Helpers for PO
 
 func toPOItemResponse(item domain.PODetailItem) POItemResponse {
@@ -379,7 +408,7 @@ func toPOListItemResponse(item domain.POListItem) POListItemResponse {
 	}
 }
 
-// toPOCreateResponse creates a response for PO creation (MVP-003.3).
+// toPOCreateResponse creates a response for PO creation.
 func toPOCreateResponse(res *application.POCreateResult) PODetailResponse {
 	items := make([]POItemResponse, len(res.Items))
 	for i, item := range res.Items {

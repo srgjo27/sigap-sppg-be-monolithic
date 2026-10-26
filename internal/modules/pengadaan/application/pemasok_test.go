@@ -180,26 +180,9 @@ func (m *mockPORepo) Create(ctx context.Context, po *domain.PurchaseOrder, items
 	return po, items, nil
 }
 
-// Exec executes a query without returning rows (mock implementation).
-func (m *mockPORepo) Exec(ctx context.Context, query string, args ...any) error {
-	return nil
-}
-
-// QueryRow executes a query that returns at most one row (mock implementation).
-func (m *mockPORepo) QueryRow(ctx context.Context, query string, args ...any) interface{ Scan(dest ...any) error } {
-	return &mockRowScanner{}
-}
-
-type mockRowScanner struct{}
-
-func (m *mockRowScanner) Scan(dest ...any) error {
-	// Return a mock sequence number
-	if len(dest) > 0 {
-		if ptr, ok := dest[0].(*int); ok {
-			*ptr = 1
-		}
-	}
-	return nil
+// ReserveNumberSeq returns a deterministic sequence (mock implementation).
+func (m *mockPORepo) ReserveNumberSeq(ctx context.Context, sppgID int64, tahunBulan string) (int, error) {
+	return 1, nil
 }
 
 // FindByID looks up a purchase order by ID (mock implementation).
@@ -220,6 +203,27 @@ func (m *mockPORepo) GetPOItemRekap(ctx context.Context, poItemIDs []int64) (map
 // List returns filtered purchase orders (mock implementation).
 func (m *mockPORepo) List(ctx context.Context, sppgID int64, filter domain.POFilter) ([]domain.POListItem, int, error) {
 	return nil, 0, nil
+}
+
+// Stubs port methods (behavioral fakes live in po_lifecycle_test.go).
+func (m *mockPORepo) Update(ctx context.Context, po *domain.PurchaseOrder, items []domain.POItem, replaceItems bool, menuIDs []int64, replaceMenus bool) (*domain.PurchaseOrder, []domain.POItem, error) {
+	return po, items, nil
+}
+
+func (m *mockPORepo) Delete(ctx context.Context, id int64) error { return nil }
+
+func (m *mockPORepo) ListMenuIDsForPO(ctx context.Context, poID int64) ([]int64, error) {
+	return nil, nil
+}
+
+func (m *mockPORepo) HasPenerimaan(ctx context.Context, poID int64) (bool, error) { return false, nil }
+
+func (m *mockPORepo) SetDikirim(ctx context.Context, id int64, userID int64, at time.Time) (*domain.PurchaseOrder, error) {
+	return nil, nil
+}
+
+func (m *mockPORepo) SetStatus(ctx context.Context, id int64, fromStatus, toStatus string, userID int64, alasan *string, at time.Time) (*domain.PurchaseOrder, error) {
+	return nil, nil
 }
 
 type mockSPPGProvider struct {

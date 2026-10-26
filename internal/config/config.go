@@ -11,6 +11,20 @@ import (
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/domain"
 )
 
+// Storage holds S3-compatible object storage settings.
+// Enabled turns true only when endpoint/bucket/access/secret are all set.
+type Storage struct {
+	Endpoint  string
+	Bucket    string
+	AccessKey string
+	SecretKey string
+	Region    string
+	UseTLS    bool
+	// Enabled reports whether object storage is configured. When false
+	// the upload endpoint is not registered (dev still boots fine).
+	Enabled bool
+}
+
 // Config owns process configuration. Secrets come from env, never hardcoded.
 type Config struct {
 	HTTPAddr           string
@@ -20,6 +34,37 @@ type Config struct {
 	RefreshTTL         time.Duration
 	BcryptCost         int
 	CORSAllowedOrigins []string
+	Storage            Storage
+}
+
+// LoadStorage reads STORAGE_* env values (opsi upload foto).
+func LoadStorage() Storage {
+	endpoint := os.Getenv("STORAGE_ENDPOINT")
+	bucket := os.Getenv("STORAGE_BUCKET")
+	accessKey := os.Getenv("STORAGE_ACCESS_KEY")
+	secretKey := os.Getenv("STORAGE_SECRET_KEY")
+	region := os.Getenv("STORAGE_REGION")
+	useTLS := parseBool(os.Getenv("STORAGE_USE_TLS"))
+	enabled := endpoint != "" && bucket != "" && accessKey != "" && secretKey != ""
+	return Storage{
+		Endpoint:  endpoint,
+		Bucket:    bucket,
+		AccessKey: accessKey,
+		SecretKey: secretKey,
+		Region:    region,
+		UseTLS:    useTLS,
+		Enabled:   enabled,
+	}
+}
+
+// parseBool accepts "1"/"true" (case-insensitive) as true.
+func parseBool(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 // Load reads environment with safe defaults for non-secret values.
@@ -40,6 +85,7 @@ func Load() Config {
 		RefreshTTL:         parseDuration(os.Getenv("JWT_REFRESH_TTL"), domain.RefreshTokenTTL),
 		BcryptCost:         parseInt(os.Getenv("BCRYPT_COST"), 12),
 		CORSAllowedOrigins: parseCSV(os.Getenv("CORS_ALLOWED_ORIGINS"), []string{"http://localhost:5173"}),
+		Storage:            LoadStorage(),
 	}
 }
 

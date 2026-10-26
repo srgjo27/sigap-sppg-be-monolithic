@@ -141,7 +141,7 @@ func GenerateRandomPassword() (string, error) {
 	return out, nil
 }
 
-// CreateUserInput is the validated domain input for MVP-001.1.
+// CreateUserInput is the validated domain input.
 type CreateUserInput struct {
 	Nama         string
 	Email        string
@@ -152,7 +152,7 @@ type CreateUserInput struct {
 	PasswordAwal *string
 }
 
-// ValidateCreate enforces MVP-001.1 rules that do not need the database
+// ValidateCreate enforces rules that do not need the database
 // (format, required fields, role/scope shape). Existence checks
 // (sppg_id/sekolah_id found, email unique) happen in application service.
 func ValidateCreate(in CreateUserInput) error {
@@ -201,7 +201,7 @@ func ValidateCreate(in CreateUserInput) error {
 	return nil
 }
 
-// UpdateUserInput is the domain patch for MVP-001.5. Nil pointers mean no change.
+// UpdateUserInput is the domain patch. Nil pointers mean no change.
 type UpdateUserInput struct {
 	Nama          *string
 	NoHP          *string

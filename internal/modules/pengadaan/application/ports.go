@@ -43,15 +43,24 @@ type PurchaseOrderRepository interface {
 	ListBySPPGAndStatus(ctx context.Context, sppgID int64, statuses []string) ([]domain.PurchaseOrder, error)
 	ListItemsByPOIDs(ctx context.Context, poIDs []int64) (map[int64][]domain.POItem, error)
 	ListPOMenus(ctx context.Context, menuIDs []int64) (map[int64][]int64, error) // menu_id -> po_ids
-	// MVP-003.3 & MVP-003.4
 	Create(ctx context.Context, po *domain.PurchaseOrder, items []domain.POItem, menuIDs []int64) (*domain.PurchaseOrder, []domain.POItem, error)
 	FindByID(ctx context.Context, id int64) (*domain.PurchaseOrder, error)
 	List(ctx context.Context, sppgID int64, filter domain.POFilter) ([]domain.POListItem, int, error)
 	GetDetail(ctx context.Context, id int64) (*domain.PODetail, error)
 	GetPOItemRekap(ctx context.Context, poItemIDs []int64) (map[int64]domain.POItemRekap, error)
-	// For PO number generation
-	Exec(ctx context.Context, query string, args ...any) error
-	QueryRow(ctx context.Context, query string, args ...any) interface{ Scan(dest ...any) error }
+	// Update replaces PO header fields and, when replaceItems/replaceMenus are
+	// set, the whole po_item / po_menu sets. When false, the nil slice keeps
+	// existing rows.
+	Update(ctx context.Context, po *domain.PurchaseOrder, items []domain.POItem, replaceItems bool, menuIDs []int64, replaceMenus bool) (*domain.PurchaseOrder, []domain.POItem, error)
+	Delete(ctx context.Context, id int64) error
+	ListMenuIDsForPO(ctx context.Context, poID int64) ([]int64, error)
+	HasPenerimaan(ctx context.Context, poID int64) (bool, error)
+	SetDikirim(ctx context.Context, id int64, userID int64, at time.Time) (*domain.PurchaseOrder, error)
+	SetStatus(ctx context.Context, id int64, fromStatus, toStatus string, userID int64, alasan *string, at time.Time) (*domain.PurchaseOrder, error)
+	// reserve the next PO number sequence for the SPPG and
+	// month inside one transaction guarded by pg_advisory_xact_lock. Numbers of
+	// deleted POs stay reserved, so sequences never move backwards.
+	ReserveNumberSeq(ctx context.Context, sppgID int64, tahunBulan string) (int, error)
 }
 
 // SPPGProvider resolves SPPG info.

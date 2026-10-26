@@ -39,7 +39,7 @@ func userAgent(c *gin.Context) *string {
 	return &ua
 }
 
-// CreateUser handles POST /users (MVP-001.1).
+// CreateUser handles POST /users.
 func (h *Handler) CreateUser(c *gin.Context) {
 	var req CreateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -63,7 +63,7 @@ func (h *Handler) CreateUser(c *gin.Context) {
 	c.JSON(http.StatusCreated, CreateUserResponse{User: toUserResponse(res.User), GeneratedPassword: res.GeneratedPassword})
 }
 
-// Login handles POST /auth/login (MVP-001.2).
+// Login handles POST /auth/login.
 func (h *Handler) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -84,7 +84,7 @@ func (h *Handler) Login(c *gin.Context) {
 	})
 }
 
-// Refresh handles POST /auth/refresh (MVP-001.3).
+// Refresh handles POST /auth/refresh.
 func (h *Handler) Refresh(c *gin.Context) {
 	var req RefreshRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -99,7 +99,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 	c.JSON(http.StatusOK, RefreshResponse{AccessToken: res.AccessToken, RefreshToken: res.RefreshToken, ExpiresIn: res.ExpiresIn})
 }
 
-// Logout handles POST /auth/logout (MVP-001.3).
+// Logout handles POST /auth/logout.
 // Without query params it revokes the refresh token in the body.
 // With ?all=true it revokes every session of the caller.
 // Success is HTTP 204 with no body.
@@ -129,7 +129,7 @@ func (h *Handler) Logout(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// Me handles GET /auth/me (MVP-001.4).
+// Me handles GET /auth/me.
 func (h *Handler) Me(c *gin.Context) {
 	claims, ok := CurrentUser(c)
 	if !ok {
@@ -144,7 +144,7 @@ func (h *Handler) Me(c *gin.Context) {
 	c.JSON(http.StatusOK, toMeResponse(profile))
 }
 
-// UpdateUser handles PATCH /users/:id (MVP-001.5).
+// UpdateUser handles PATCH /users/:id.
 func (h *Handler) UpdateUser(c *gin.Context) {
 	var req UpdateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -178,7 +178,7 @@ func (h *Handler) UpdateUser(c *gin.Context) {
 	c.JSON(http.StatusOK, UpdateUserResponse{User: toUserResponse(res.User), PasswordSementara: res.TempPassword})
 }
 
-// ListUsers handles GET /users (MVP-002.8).
+// ListUsers handles GET /users.
 func (h *Handler) ListUsers(c *gin.Context) {
 	claims, ok := CurrentUser(c)
 	if !ok {
@@ -253,7 +253,7 @@ func (h *Handler) ListUsers(c *gin.Context) {
 	})
 }
 
-// GetUser handles GET /users/:id (MVP-002.8).
+// GetUser handles GET /users/:id.
 func (h *Handler) GetUser(c *gin.Context) {
 	claims, ok := CurrentUser(c)
 	if !ok {
@@ -273,7 +273,7 @@ func (h *Handler) GetUser(c *gin.Context) {
 	c.JSON(http.StatusOK, toUserDetailResponse(view))
 }
 
-// ChangePassword handles PUT /auth/password (MVP-001.6).
+// ChangePassword handles PUT /auth/password.
 // Success is HTTP 204 with no body.
 func (h *Handler) ChangePassword(c *gin.Context) {
 	var req ChangePasswordRequest
@@ -293,7 +293,7 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-// ListAuditLogs handles GET /audit-logs (MVP-001.7).
+// ListAuditLogs handles GET /audit-logs.
 func (h *Handler) ListAuditLogs(c *gin.Context) {
 	claims, ok := CurrentUser(c)
 	if !ok {

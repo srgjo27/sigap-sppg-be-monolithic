@@ -119,7 +119,7 @@ func ValidateKebutuhanFilter(f KebutuhanFilter) error {
 	return nil
 }
 
-// ComputeKebutuhan computes qty per menu (same as MVP-002.6).
+// ComputeKebutuhan computes qty per menu.
 // qty = ceil((gram_per_porsi * target_porsi * (1 + cadangan/100)) / gram_per_satuan)
 // For butir and pcs, result is integer; others max 2 decimals.
 func ComputeKebutuhan(gramPerPorsi float64, satuan string, gramPerSatuan float64, targetPorsi int, cadanganPersen float64) (totalGram float64, qty float64) {

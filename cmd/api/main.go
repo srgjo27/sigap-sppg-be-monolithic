@@ -11,6 +11,9 @@ import (
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/application"
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/infrastructure"
 	authhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/transport/http"
+	berkasapplication "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/berkas/application"
+	berkasinfrastructure "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/berkas/infrastructure"
+	berkashttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/berkas/transport/http"
 	menuapplication "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/menu/application"
 	menuinfrastructure "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/menu/infrastructure"
 	menuhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/menu/transport/http"
@@ -54,6 +57,10 @@ func main() {
 		pengadaanSPPG    pengadaanapplication.SPPGProvider
 		pengadaanAudit   pengadaanapplication.AuditRepository
 		pengadaanNotifs  pengadaanapplication.NotificationRepository
+
+		berkasStore berkasapplication.ObjectStore
+		berkasRepo  berkasapplication.BerkasRepository
+		berkasSPPG  berkasapplication.SPPGCodeProvider
 	)
 
 	if cfg.DatabaseURL != "" {
@@ -85,6 +92,9 @@ func main() {
 		pengadaanSPPG = pengadaaninfrastructure.NewSPPGPostgres(pool)
 		pengadaanAudit = pengadaaninfrastructure.NewAuditPostgres(pool)
 		pengadaanNotifs = pengadaaninfrastructure.NewNotificationPostgres(pool)
+		// Berkas (upload foto MVP-003.7) butuh database + object storage.
+		berkasRepo = berkasinfrastructure.NewBerkasPostgres(pool)
+		berkasSPPG = berkasinfrastructure.NewSPPGPostgres(pool)
 	} else {
 		log.Println("DATABASE_URL empty; using in-memory auth stores (dev only)")
 		mem := infrastructure.NewMemoryStores()
@@ -128,12 +138,54 @@ func main() {
 	})
 	pengadaanHandler := pengadaanhttp.NewHandler(pengadaanSvc)
 
-	router := server.New(cfg, server.Deps{
+	deps := server.Deps{
 		AuthHandler:      handler,
 		AuthMiddleware:   mw,
 		MenuHandler:      menuHandler,
 		PengadaanHandler: pengadaanHandler,
-	})
+	}
+
+	// Berkas upload aktif hanya bila object storage ada
+	// (STORAGE_ENDPOINT, STORAGE_BUCKET, STORAGE_ACCESS_KEY,
+	// STORAGE_SECRET_KEY) dan database tersambung.
+	if cfg.Storage.Enabled && berkasRepo != nil {
+		store, err := berkasinfrastructure.NewMinioObjectStore(
+			cfg.Storage.Endpoint, cfg.Storage.AccessKey, cfg.Storage.SecretKey,
+			cfg.Storage.Region, cfg.Storage.UseTLS, cfg.Storage.Bucket,
+		)
+		if err != nil {
+			log.Fatalf("init object storage: %v", err)
+		}
+		berkasStore = store
+		berkasSvc := berkasapplication.New(berkasapplication.Deps{
+			Store: berkasStore, Repo: berkasRepo, SPPG: berkasSPPG,
+		})
+		deps.BerkasHandler = berkashttp.NewHandler(berkasSvc)
+
+		// Bersihkan berkas tiap jam (berkas yang tidak
+		// dipakai lebih dari 24 jam dihapus dari object storage + tabel).
+		purgeCtx := context.Background()
+		go func() {
+			ticker := time.NewTicker(time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-purgeCtx.Done():
+					return
+				case <-ticker.C:
+					if err := berkasSvc.PurgeUnused(purgeCtx, 24*time.Hour); err != nil {
+						log.Printf("warning: berkas purge: %v", err)
+					}
+				}
+			}
+		}()
+	} else {
+		if cfg.Storage.Enabled && berkasRepo == nil {
+			log.Println("warning: STORAGE_* di-set tapi DATABASE_URL kosong; /uploads dinonaktifkan")
+		}
+	}
+
+	router := server.New(cfg, deps)
 
 	if err := router.Run(cfg.HTTPAddr); err != nil {
 		log.Fatal(err)
