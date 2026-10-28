@@ -49,14 +49,15 @@ func main() {
 		menuAudit   menuapplication.AuditRepository
 		menuNotifs  menuapplication.NotificationRepository
 
-		pengadaanPemasok pengadaanapplication.PemasokRepository
-		pengadaanBahan   pengadaanapplication.BahanRepository
-		pengadaanMenus   pengadaanapplication.MenuRepository
-		pengadaanSiklus  pengadaanapplication.SiklusRepository
-		pengadaanPO      pengadaanapplication.PurchaseOrderRepository
-		pengadaanSPPG    pengadaanapplication.SPPGProvider
-		pengadaanAudit   pengadaanapplication.AuditRepository
-		pengadaanNotifs  pengadaanapplication.NotificationRepository
+		pengadaanPemasok    pengadaanapplication.PemasokRepository
+		pengadaanBahan      pengadaanapplication.BahanRepository
+		pengadaanMenus      pengadaanapplication.MenuRepository
+		pengadaanSiklus     pengadaanapplication.SiklusRepository
+		pengadaanPO         pengadaanapplication.PurchaseOrderRepository
+		pengadaanPenerimaan pengadaanapplication.PenerimaanRepository
+		pengadaanSPPG       pengadaanapplication.SPPGProvider
+		pengadaanAudit      pengadaanapplication.AuditRepository
+		pengadaanNotifs     pengadaanapplication.NotificationRepository
 
 		berkasStore berkasapplication.ObjectStore
 		berkasRepo  berkasapplication.BerkasRepository
@@ -89,10 +90,10 @@ func main() {
 		pengadaanMenus = pengadaaninfrastructure.NewMenuPostgres(pool)
 		pengadaanSiklus = pengadaaninfrastructure.NewSiklusPostgres(pool)
 		pengadaanPO = pengadaaninfrastructure.NewPurchaseOrderPostgres(pool)
+		pengadaanPenerimaan = pengadaaninfrastructure.NewPenerimaanPostgres(pool)
 		pengadaanSPPG = pengadaaninfrastructure.NewSPPGPostgres(pool)
 		pengadaanAudit = pengadaaninfrastructure.NewAuditPostgres(pool)
 		pengadaanNotifs = pengadaaninfrastructure.NewNotificationPostgres(pool)
-		// Berkas (upload foto MVP-003.7) butuh database + object storage.
 		berkasRepo = berkasinfrastructure.NewBerkasPostgres(pool)
 		berkasSPPG = berkasinfrastructure.NewSPPGPostgres(pool)
 	} else {
@@ -134,7 +135,8 @@ func main() {
 
 	pengadaanSvc := pengadaanapplication.New(pengadaanapplication.Deps{
 		Pemasok: pengadaanPemasok, Bahan: pengadaanBahan, Menus: pengadaanMenus, Siklus: pengadaanSiklus, PO: pengadaanPO,
-		SPPG: pengadaanSPPG, Audits: pengadaanAudit, Notifs: pengadaanNotifs,
+		Penerimaan: pengadaanPenerimaan,
+		SPPG:       pengadaanSPPG, Audits: pengadaanAudit, Notifs: pengadaanNotifs,
 	})
 	pengadaanHandler := pengadaanhttp.NewHandler(pengadaanSvc)
 

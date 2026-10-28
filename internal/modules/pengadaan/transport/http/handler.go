@@ -5,9 +5,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
+	authdomain "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/domain"
 	authhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/transport/http"
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/pengadaan/application"
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/pengadaan/domain"
@@ -501,4 +503,207 @@ func (h *Handler) TutupPurchaseOrder(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, toPOTransitionResponse(res.Detail, nil, res.ItemTidakTerpenuhi))
+}
+
+// CreatePenerimaan handles POST /api/v1/purchase-orders/{id}/penerimaan (MVP-003.8).
+func (h *Handler) CreatePenerimaan(c *gin.Context) {
+	poID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrPONotFound)
+		return
+	}
+	var req CreatePenerimaanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		MapError(c, &domain.ValidationError{Fields: map[string]string{"body": "invalid JSON"}})
+		return
+	}
+	clientRef := c.GetHeader("Idempotency-Key")
+	if clientRef == "" {
+		MapError(c, &domain.ValidationError{Fields: map[string]string{"idempotency_key": "required"}})
+		return
+	}
+
+	items := make([]domain.PenerimaanItem, len(req.Items))
+	for i, item := range req.Items {
+		items[i] = domain.PenerimaanItem{
+			POItemID:        item.POItemID,
+			QtyDiterima:     item.QtyDiterima,
+			QtyDitolak:      item.QtyDitolak,
+			AlasanTolak:     item.AlasanTolak,
+			SuhuTerima:      item.SuhuTerima,
+			Kondisi:         item.Kondisi,
+			TglKedaluwarsa:  item.TglKedaluwarsa,
+			FotoBerkasID:    item.FotoBerkasID,
+			LolosSuhu:       item.LolosSuhu,
+			Catatan:         item.Catatan,
+			NilaiPotongNota: item.NilaiPotongNota,
+		}
+	}
+
+	claims, _ := authhttp.CurrentUser(c)
+	in := domain.CreatePenerimaanInput{
+		Items:     items,
+		ClientRef: clientRef,
+	}
+	res, err := h.svc.CreatePenerimaan(c.Request.Context(), claims, poID, in, clientIP(c))
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+
+	lots := make([]PenerimaanDetailResponse, len(res.Lots))
+	for i, lot := range res.Lots {
+		lots[i] = toPenerimaanDetailResponse(&domain.PenerimaanDetail{
+			ID:              lot.ID,
+			POItemID:        lot.POItemID,
+			KodeLot:         lot.KodeLot,
+			WaktuTerima:     lot.WaktuTerima,
+			QtyDiterima:     lot.QtyDiterima,
+			QtyDitolak:      lot.QtyDitolak,
+			AlasanTolak:     lot.AlasanTolak,
+			SuhuTerima:      lot.SuhuTerima,
+			Kondisi:         lot.Kondisi,
+			TglKedaluwarsa:  lot.TglKedaluwarsa,
+			FotoURL:         lot.FotoURL,
+			DiperiksaOleh:   lot.DiperiksaOleh,
+			NilaiPotongNota: lot.NilaiPotongNota,
+			SPPGID:          lot.SPPGID,
+			ClientRef:       lot.ClientRef,
+			Catatan:         lot.Catatan,
+			CreatedAt:       lot.CreatedAt,
+			LolosSuhu:       lot.LolosSuhu,
+		})
+	}
+	c.JSON(http.StatusCreated, gin.H{
+		"po": map[string]any{
+			"id":       res.PO.ID,
+			"nomor_po": res.PO.NomorPO,
+			"status":   res.PO.Status,
+			"rekap_nilai": map[string]any{
+				"total_pesanan":       res.PO.Total,
+				"total_nilai_dikirim": 0,
+				"total_potong_nota":   0,
+				"total_tagihan":       0,
+			},
+		},
+		"lots":     lots,
+		"warnings": res.Warnings,
+	})
+}
+
+// ListPenerimaan handles GET /api/v1/penerimaan (MVP-003.9).
+func (h *Handler) ListPenerimaan(c *gin.Context) {
+	claims, _ := authhttp.CurrentUser(c)
+	filter := domain.PenerimaanFilter{}
+	if v := c.Query("dari"); v != "" {
+		t, err := time.Parse("2006-01-02", v)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"dari": "use YYYY-MM-DD"}})
+			return
+		}
+		filter.Dari = &t
+	}
+	if v := c.Query("sampai"); v != "" {
+		t, err := time.Parse("2006-01-02", v)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"sampai": "use YYYY-MM-DD"}})
+			return
+		}
+		filter.Sampai = &t
+	}
+	if v := c.Query("bahan_id"); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+			filter.BahanID = &id
+		}
+	}
+	if v := c.Query("pemasok_id"); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+			filter.PemasokID = &id
+		}
+	}
+	if v := c.Query("po_id"); v != "" {
+		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+			filter.POID = &id
+		}
+	}
+	if v := c.Query("kondisi"); v != "" {
+		filter.Kondisi = &v
+	}
+	if v := c.Query("kode_lot"); v != "" {
+		filter.KodeLot = &v
+	}
+	if v := c.Query("tersedia"); v != "" {
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			MapError(c, &domain.ValidationError{Fields: map[string]string{"tersedia": "must be a boolean"}})
+			return
+		}
+		filter.Tersedia = &parsed
+	}
+	if v := c.Query("sppg_id"); v != "" {
+		if claims.Role == authdomain.RoleAdmin || claims.Role == authdomain.RolePengawas {
+			if id, err := strconv.ParseInt(v, 10, 64); err == nil {
+				filter.SPPGID = &id
+			}
+		}
+	}
+	if v := c.Query("page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			filter.Page = n
+		}
+	}
+	if v := c.Query("per_page"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			filter.Limit = n
+		}
+	}
+
+	// Default: last 7 days.
+	if filter.Dari == nil && filter.Sampai == nil {
+		now := time.Now()
+		dari := now.AddDate(0, 0, -7)
+		filter.Dari = &dari
+		filter.Sampai = &now
+	}
+
+	res, err := h.svc.ListPenerimaan(c.Request.Context(), claims, filter)
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+
+	// petugas_dapur: hide price fields.
+	isPetugasDapur := claims.Role == authdomain.RolePetugasDapur
+	data := make([]PenerimaanListItemResponse, len(res.Data))
+	for i, item := range res.Data {
+		resp := toPenerimaanListItemResponse(item)
+		if isPetugasDapur {
+			resp.NilaiPotongNota = 0
+		}
+		data[i] = resp
+	}
+	c.JSON(http.StatusOK, PenerimaanListResponse{
+		Data: data,
+		Meta: PageMeta{Page: res.Meta.Page, PerPage: res.Meta.PerPage, Total: res.Meta.Total},
+	})
+}
+
+// GetPenerimaan handles GET /api/v1/penerimaan/{id} (MVP-003.9).
+func (h *Handler) GetPenerimaan(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrLotNotFound)
+		return
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	res, err := h.svc.GetPenerimaan(c.Request.Context(), claims, id)
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	resp := toPenerimaanDetailResponse(res.Detail)
+	if claims.Role == authdomain.RolePetugasDapur {
+		resp.NilaiPotongNota = 0
+	}
+	c.JSON(http.StatusOK, resp)
 }

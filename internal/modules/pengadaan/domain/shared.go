@@ -159,6 +159,192 @@ const (
 	KondisiRusak  = "rusak"
 )
 
+// validKondisi enumerates accepted kondisi values.
+var validKondisi = map[string]bool{
+	KondisiBaik:   true,
+	KondisiKurang: true,
+	KondisiRusak:  true,
+}
+
+// PenerimaanItem is one item in a penerimaan request (MVP-003.8).
+type PenerimaanItem struct {
+	POItemID        int64    `json:"po_item_id"`
+	QtyDiterima     float64  `json:"qty_diterima"`
+	QtyDitolak      float64  `json:"qty_ditolak"`
+	AlasanTolak     *string  `json:"alasan_tolak,omitempty"`
+	SuhuTerima      *float64 `json:"suhu_terima,omitempty"`
+	Kondisi         string   `json:"kondisi"`
+	TglKedaluwarsa  *string  `json:"tgl_kedaluwarsa,omitempty"` // YYYY-MM-DD
+	FotoBerkasID    int64    `json:"foto_berkas_id"`
+	LolosSuhu       *bool    `json:"lolos_suhu,omitempty"`
+	Catatan         *string  `json:"catatan,omitempty"`
+	NilaiPotongNota float64  `json:"nilai_potong_nota,omitempty"`
+}
+
+// CreatePenerimaanInput is the payload for creating receipt lots (MVP-003.8).
+// ClientRef comes from the Idempotency-Key header (transport sets it).
+type CreatePenerimaanInput struct {
+	Items     []PenerimaanItem `json:"items"`
+	ClientRef string           `json:"-"`
+}
+
+// ValidateCreatePenerimaanInput validates field-level rules for receipt lots.
+// Cross-reference rules (PO ownership, status, SPPG scoping, berkas validity,
+// temperature, expiry, tolerance) are enforced in the application service.
+func ValidateCreatePenerimaanInput(in CreatePenerimaanInput) error {
+	fields := map[string]string{}
+	if len(in.Items) < 1 || len(in.Items) > 50 {
+		fields["items"] = "must have 1-50 items"
+	}
+	seenItem := make(map[int64]bool)
+	for _, item := range in.Items {
+		if item.POItemID <= 0 {
+			fields["items"] = "po_item_id is required for all items"
+			break
+		}
+		if seenItem[item.POItemID] {
+			fields["items"] = "duplicate po_item_id in items"
+			break
+		}
+		seenItem[item.POItemID] = true
+		if item.QtyDiterima < 0 {
+			fields["items"] = "qty_diterima must be >= 0"
+			break
+		}
+		if item.QtyDitolak < 0 {
+			fields["items"] = "qty_ditolak must be >= 0"
+			break
+		}
+		if item.QtyDiterima+item.QtyDitolak <= 0 {
+			fields["items"] = "qty_diterima + qty_ditolak must be > 0"
+			break
+		}
+		if !validKondisi[item.Kondisi] {
+			fields["items"] = "kondisi must be baik, kurang, or rusak"
+			break
+		}
+		if item.Kondisi == KondisiRusak && item.QtyDiterima > 0 {
+			fields["items"] = "damaged item cannot be accepted (qty_diterima must be 0)"
+			break
+		}
+		if item.Kondisi == KondisiKurang && item.Catatan == nil {
+			fields["items"] = "catatan is required when kondisi is kurang"
+			break
+		}
+		if item.QtyDitolak > 0 && item.AlasanTolak == nil {
+			fields["items"] = "alasan_tolak is required when qty_ditolak > 0"
+			break
+		}
+		if item.AlasanTolak != nil && len(strings.TrimSpace(*item.AlasanTolak)) < 3 {
+			fields["items"] = "alasan_tolak must be 3-500 characters"
+			break
+		}
+		if item.AlasanTolak != nil && len(strings.TrimSpace(*item.AlasanTolak)) > 500 {
+			fields["items"] = "alasan_tolak must be 3-500 characters"
+			break
+		}
+		if item.FotoBerkasID <= 0 {
+			fields["items"] = "foto_berkas_id is required"
+			break
+		}
+		if item.NilaiPotongNota < 0 {
+			fields["items"] = "nilai_potong_nota must be >= 0"
+			break
+		}
+		if item.SuhuTerima != nil && (*item.SuhuTerima < -30 || *item.SuhuTerima > 60) {
+			fields["items"] = "suhu_terima must be between -30 and 60"
+			break
+		}
+		if item.TglKedaluwarsa != nil {
+			if _, err := time.Parse("2006-01-02", *item.TglKedaluwarsa); err != nil {
+				fields["items"] = "tgl_kedaluwarsa must use YYYY-MM-DD"
+				break
+			}
+		}
+	}
+	if len(fields) > 0 {
+		return &ValidationError{Fields: fields}
+	}
+	return nil
+}
+
+// PenerimaanListItem is a summary row for GET /penerimaan list view.
+type PenerimaanListItem struct {
+	ID              int64
+	KodeLot         string
+	NomorPO         string
+	PemasokNama     string
+	BahanID         int64
+	BahanNama       string
+	BahanSatuan     string
+	BahanMudahRusak bool
+	WaktuTerima     time.Time
+	QtyDiterima     float64
+	QtyDitolak      float64
+	QtyTerpakai     float64
+	QtySisa         float64
+	Kondisi         string
+	SuhuTerima      *float64
+	LolosSuhu       *bool
+	TglKedaluwarsa  *time.Time
+	NilaiPotongNota float64
+}
+
+// PenerimaanDetail is the full detail of one receipt lot (MVP-003.9).
+type PenerimaanDetail struct {
+	ID              int64
+	POItemID        int64
+	NomorPO         string
+	BahanID         int64
+	BahanNama       string
+	BahanSatuan     string
+	KodeLot         string
+	WaktuTerima     time.Time
+	QtyDiterima     float64
+	QtyDitolak      float64
+	AlasanTolak     *string
+	SuhuTerima      *float64
+	LolosSuhu       *bool
+	Kondisi         string
+	TglKedaluwarsa  *time.Time
+	FotoURL         string
+	DiperiksaOleh   int64
+	DiperiksaNama   string
+	NilaiPotongNota float64
+	SPPGID          int64
+	ClientRef       string
+	Catatan         *string
+	DikoreksiOleh   *int64
+	DikoreksiAt     *time.Time
+	CreatedAt       time.Time
+	BatchQtyDipakai float64
+	POStatus        string
+	PemasokID       int64
+	PemasokNama     string
+	PemasokNoHP     string
+}
+
+// ValidatePenerimaanFilter validates the penerimaan list filter.
+func ValidatePenerimaanFilter(f PenerimaanFilter) error {
+	fields := map[string]string{}
+	if f.Kondisi != nil && !validKondisi[*f.Kondisi] {
+		fields["kondisi"] = "must be baik, kurang, or rusak"
+	}
+	if f.Dari != nil && f.Sampai != nil {
+		if f.Sampai.Before(*f.Dari) {
+			fields["sampai"] = "must not be before dari"
+		}
+		days := f.Sampai.Sub(*f.Dari).Hours() / 24
+		if days > 31 {
+			fields["sampai"] = "range must not exceed 31 days"
+		}
+	}
+	if len(fields) > 0 {
+		return &ValidationError{Fields: fields}
+	}
+	return nil
+}
+
 // SiklusDana status constants
 const (
 	SiklusStatusDraf       = "draf"

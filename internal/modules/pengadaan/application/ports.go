@@ -63,6 +63,23 @@ type PurchaseOrderRepository interface {
 	ReserveNumberSeq(ctx context.Context, sppgID int64, tahunBulan string) (int, error)
 }
 
+// PenerimaanRepository is the persistence port for penerimaan_bahan receipt lots.
+type PenerimaanRepository interface {
+	// CreatePenerimaan inserts one receipt lot, marks the foto berkas as used
+	// (ref_tabel='penerimaan_bahan', ref_id=<new id>, dipakai_at=now), and
+	// advances the PO status (dikirim->diterima_sebagian or
+	// diterima_sebagian->selesai) — all in one transaction.
+	// clientRef provides idempotency via the uq_penerimaan_idem unique
+	// constraint on (client_ref, po_item_id).
+	CreatePenerimaan(ctx context.Context, poID int64, in domain.CreatePenerimaanInput, diperiksaOleh int64, at time.Time) ([]*domain.PenerimaanBahan, *domain.PurchaseOrder, error)
+
+	// List returns filtered receipt lots for the SPPG.
+	List(ctx context.Context, sppgID int64, filter domain.PenerimaanFilter) ([]domain.PenerimaanListItem, int, error)
+
+	// GetByID returns one receipt lot with its PO/item/bahan/pemasok context.
+	GetByID(ctx context.Context, id int64) (*domain.PenerimaanDetail, error)
+}
+
 // SPPGProvider resolves SPPG info.
 type SPPGProvider interface {
 	GetKode(ctx context.Context, id int64) (string, error)
@@ -83,28 +100,30 @@ type Clock func() time.Time
 
 // Service orchestrates pengadaan use cases.
 type Service struct {
-	pemasok PemasokRepository
-	bahan   BahanRepository
-	menus   MenuRepository
-	siklus  SiklusRepository
-	po      PurchaseOrderRepository
-	sppg    SPPGProvider
-	audits  AuditRepository
-	notifs  NotificationRepository
-	clock   Clock
+	pemasok    PemasokRepository
+	bahan      BahanRepository
+	menus      MenuRepository
+	siklus     SiklusRepository
+	po         PurchaseOrderRepository
+	penerimaan PenerimaanRepository
+	sppg       SPPGProvider
+	audits     AuditRepository
+	notifs     NotificationRepository
+	clock      Clock
 }
 
 // Deps wires the service without a framework.
 type Deps struct {
-	Pemasok PemasokRepository
-	Bahan   BahanRepository
-	Menus   MenuRepository
-	Siklus  SiklusRepository
-	PO      PurchaseOrderRepository
-	SPPG    SPPGProvider
-	Audits  AuditRepository
-	Notifs  NotificationRepository
-	Clock   Clock
+	Pemasok    PemasokRepository
+	Bahan      BahanRepository
+	Menus      MenuRepository
+	Siklus     SiklusRepository
+	PO         PurchaseOrderRepository
+	Penerimaan PenerimaanRepository
+	SPPG       SPPGProvider
+	Audits     AuditRepository
+	Notifs     NotificationRepository
+	Clock      Clock
 }
 
 // New builds a Service with sensible defaults.
@@ -114,14 +133,15 @@ func New(d Deps) *Service {
 		clock = time.Now
 	}
 	return &Service{
-		pemasok: d.Pemasok,
-		bahan:   d.Bahan,
-		menus:   d.Menus,
-		siklus:  d.Siklus,
-		po:      d.PO,
-		sppg:    d.SPPG,
-		audits:  d.Audits,
-		notifs:  d.Notifs,
-		clock:   clock,
+		pemasok:    d.Pemasok,
+		bahan:      d.Bahan,
+		menus:      d.Menus,
+		siklus:     d.Siklus,
+		po:         d.PO,
+		penerimaan: d.Penerimaan,
+		sppg:       d.SPPG,
+		audits:     d.Audits,
+		notifs:     d.Notifs,
+		clock:      clock,
 	}
 }

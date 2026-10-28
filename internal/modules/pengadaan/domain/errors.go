@@ -33,6 +33,7 @@ var (
 	ErrPOCannotBeSent      = errors.New("purchase order cannot be sent (no items, past delivery date)")
 	ErrPONumberConflict    = errors.New("purchase order number conflict")
 	ErrSPPGNotFound        = errors.New("sppg not found")
+	ErrKodeLotConflict     = errors.New("kode_lot conflict")
 )
 
 // ValidationError holds field-level validation errors.

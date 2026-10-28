@@ -64,4 +64,22 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *authhttp.Middleware) {
 	rg.POST("/purchase-orders/:id/kirim", mw.Authenticate(), freshPassword, readOnly, canCreatePO, h.KirimPurchaseOrder)
 	rg.POST("/purchase-orders/:id/batal", mw.Authenticate(), freshPassword, readOnly, canBatalPO, h.BatalPurchaseOrder)
 	rg.POST("/purchase-orders/:id/tutup", mw.Authenticate(), freshPassword, readOnly, canCreatePO, h.TutupPurchaseOrder)
+
+	canCreatePenerimaan := mw.RequireRoles(
+		authdomain.RoleAkuntan,
+		authdomain.RolePetugasDapur,
+	)
+
+	canReadPenerimaan := mw.RequireRoles(
+		authdomain.RoleAdmin,
+		authdomain.RoleKepalaSPPG,
+		authdomain.RoleAkuntan,
+		authdomain.RoleAhliGizi,
+		authdomain.RolePetugasDapur,
+		authdomain.RolePengawas,
+	)
+
+	rg.POST("/purchase-orders/:id/penerimaan", mw.Authenticate(), freshPassword, readOnly, canCreatePenerimaan, h.CreatePenerimaan)
+	rg.GET("/penerimaan", mw.Authenticate(), freshPassword, readOnly, canReadPenerimaan, h.ListPenerimaan)
+	rg.GET("/penerimaan/:id", mw.Authenticate(), freshPassword, readOnly, canReadPenerimaan, h.GetPenerimaan)
 }

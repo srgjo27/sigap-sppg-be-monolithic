@@ -62,6 +62,8 @@ func MapError(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, ErrorEnvelope{Error: ErrorBody{Code: "STATUS_TIDAK_SESUAI", Message: "purchase order status does not allow this action"}})
 	case errors.Is(err, domain.ErrPOHasReceipt):
 		c.JSON(http.StatusConflict, ErrorEnvelope{Error: ErrorBody{Code: "PO_SUDAH_ADA_PENERIMAAN", Message: "purchase order already has receipt"}})
+	case errors.Is(err, domain.ErrKodeLotConflict):
+		c.JSON(http.StatusConflict, ErrorEnvelope{Error: ErrorBody{Code: "KODE_LOT_GANDA", Message: "kode_lot conflict, please retry"}})
 	case errors.Is(err, domain.ErrPONumberConflict):
 		c.JSON(http.StatusConflict, ErrorEnvelope{Error: ErrorBody{Code: "PO_NOMOR_GANDA", Message: "purchase order number conflict, please retry"}})
 	case errors.Is(err, domain.ErrItemDuplicate):

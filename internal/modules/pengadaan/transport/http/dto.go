@@ -528,3 +528,163 @@ func derefString(s *string) string {
 	}
 	return *s
 }
+
+// ===== Penerimaan DTOs (MVP-003.8, MVP-003.9) =====
+
+type PenerimaanItemRequest struct {
+	POItemID        int64    `json:"po_item_id" binding:"required"`
+	QtyDiterima     float64  `json:"qty_diterima" binding:"required,gte=0"`
+	QtyDitolak      float64  `json:"qty_ditolak" binding:"required,gte=0"`
+	AlasanTolak     *string  `json:"alasan_tolak,omitempty"`
+	SuhuTerima      *float64 `json:"suhu_terima,omitempty"`
+	Kondisi         string   `json:"kondisi" binding:"required,oneof=baik kurang rusak"`
+	TglKedaluwarsa  *string  `json:"tgl_kedaluwarsa,omitempty"`
+	FotoBerkasID    int64    `json:"foto_berkas_id" binding:"required,gt=0"`
+	LolosSuhu       *bool    `json:"lolos_suhu,omitempty"`
+	Catatan         *string  `json:"catatan,omitempty"`
+	NilaiPotongNota float64  `json:"nilai_potong_nota,omitempty"`
+}
+
+type CreatePenerimaanRequest struct {
+	Items []PenerimaanItemRequest `json:"items" binding:"required,min=1,max=50"`
+}
+
+type PenerimaanFilter struct {
+	Dari      string `form:"dari"`   // YYYY-MM-DD
+	Sampai    string `form:"sampai"` // YYYY-MM-DD
+	BahanID   *int64 `form:"bahan_id"`
+	PemasokID *int64 `form:"pemasok_id"`
+	POID      *int64 `form:"po_id"`
+	Kondisi   string `form:"kondisi"`
+	KodeLot   string `form:"kode_lot"`
+	Tersedia  *bool  `form:"tersedia"`
+	SPPGID    *int64 `form:"sppg_id"` // only for admin/pengawas
+	Page      int    `form:"page,default=1"`
+	PerPage   int    `form:"per_page,default=20"`
+}
+
+type PenerimaanListItemResponse struct {
+	ID              int64      `json:"id"`
+	KodeLot         string     `json:"kode_lot"`
+	NomorPO         string     `json:"nomor_po"`
+	PemasokNama     string     `json:"pemasok_nama"`
+	BahanID         int64      `json:"bahan_id"`
+	BahanNama       string     `json:"bahan_nama"`
+	BahanSatuan     string     `json:"bahan_satuan"`
+	BahanMudahRusak bool       `json:"bahan_mudah_rusak"`
+	WaktuTerima     time.Time  `json:"waktu_terima"`
+	QtyDiterima     float64    `json:"qty_diterima"`
+	QtyDitolak      float64    `json:"qty_ditolak"`
+	QtyTerpakai     float64    `json:"qty_terpakai"`
+	QtySisa         float64    `json:"qty_sisa"`
+	Kondisi         string     `json:"kondisi"`
+	SuhuTerima      *float64   `json:"suhu_terima,omitempty"`
+	LolosSuhu       *bool      `json:"lolos_suhu,omitempty"`
+	TglKedaluwarsa  *time.Time `json:"tgl_kedaluwarsa,omitempty"`
+	NilaiPotongNota float64    `json:"nilai_potong_nota"`
+}
+
+type PenerimaanListResponse struct {
+	Data []PenerimaanListItemResponse `json:"data"`
+	Meta PageMeta                     `json:"meta"`
+}
+
+type PenerimaanDetailResponse struct {
+	ID              int64      `json:"id"`
+	POItemID        int64      `json:"po_item_id"`
+	NomorPO         string     `json:"nomor_po"`
+	BahanID         int64      `json:"bahan_id"`
+	BahanNama       string     `json:"bahan_nama"`
+	BahanSatuan     string     `json:"bahan_satuan"`
+	KodeLot         string     `json:"kode_lot"`
+	WaktuTerima     time.Time  `json:"waktu_terima"`
+	QtyDiterima     float64    `json:"qty_diterima"`
+	QtyDitolak      float64    `json:"qty_ditolak"`
+	AlasanTolak     *string    `json:"alasan_tolak,omitempty"`
+	SuhuTerima      *float64   `json:"suhu_terima,omitempty"`
+	LolosSuhu       *bool      `json:"lolos_suhu,omitempty"`
+	Kondisi         string     `json:"kondisi"`
+	TglKedaluwarsa  *time.Time `json:"tgl_kedaluwarsa,omitempty"`
+	FotoURL         string     `json:"foto_url"`
+	DiperiksaOleh   int64      `json:"diperiksa_oleh"`
+	DiperiksaNama   string     `json:"diperiksa_nama"`
+	NilaiPotongNota float64    `json:"nilai_potong_nota"`
+	SPPGID          int64      `json:"sppg_id"`
+	Catatan         *string    `json:"catatan,omitempty"`
+	DikoreksiOleh   *int64     `json:"dikoreksi_oleh,omitempty"`
+	DikoreksiAt     *time.Time `json:"dikoreksi_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	BatchQtyDipakai float64    `json:"batch_qty_dipakai"`
+	POStatus        string     `json:"po_status"`
+	PemasokID       int64      `json:"pemasok_id"`
+	PemasokNama     string     `json:"pemasok_nama"`
+	PemasokNoHP     string     `json:"pemasok_no_hp"`
+}
+
+func toPenerimaanListItemResponse(item domain.PenerimaanListItem) PenerimaanListItemResponse {
+	return PenerimaanListItemResponse{
+		ID:              item.ID,
+		KodeLot:         item.KodeLot,
+		NomorPO:         item.NomorPO,
+		PemasokNama:     item.PemasokNama,
+		BahanID:         item.BahanID,
+		BahanNama:       item.BahanNama,
+		BahanSatuan:     item.BahanSatuan,
+		BahanMudahRusak: item.BahanMudahRusak,
+		WaktuTerima:     item.WaktuTerima,
+		QtyDiterima:     item.QtyDiterima,
+		QtyDitolak:      item.QtyDitolak,
+		QtyTerpakai:     item.QtyTerpakai,
+		QtySisa:         item.QtySisa,
+		Kondisi:         item.Kondisi,
+		SuhuTerima:      item.SuhuTerima,
+		LolosSuhu:       item.LolosSuhu,
+		TglKedaluwarsa:  item.TglKedaluwarsa,
+		NilaiPotongNota: item.NilaiPotongNota,
+	}
+}
+
+func toPenerimaanListResponse(res *application.PenerimaanListResult) PenerimaanListResponse {
+	data := make([]PenerimaanListItemResponse, len(res.Data))
+	for i, item := range res.Data {
+		data[i] = toPenerimaanListItemResponse(item)
+	}
+	return PenerimaanListResponse{
+		Data: data,
+		Meta: PageMeta{Page: res.Meta.Page, PerPage: res.Meta.PerPage, Total: res.Meta.Total},
+	}
+}
+
+func toPenerimaanDetailResponse(detail *domain.PenerimaanDetail) PenerimaanDetailResponse {
+	return PenerimaanDetailResponse{
+		ID:              detail.ID,
+		POItemID:        detail.POItemID,
+		NomorPO:         detail.NomorPO,
+		BahanID:         detail.BahanID,
+		BahanNama:       detail.BahanNama,
+		BahanSatuan:     detail.BahanSatuan,
+		KodeLot:         detail.KodeLot,
+		WaktuTerima:     detail.WaktuTerima,
+		QtyDiterima:     detail.QtyDiterima,
+		QtyDitolak:      detail.QtyDitolak,
+		AlasanTolak:     detail.AlasanTolak,
+		SuhuTerima:      detail.SuhuTerima,
+		LolosSuhu:       detail.LolosSuhu,
+		Kondisi:         detail.Kondisi,
+		TglKedaluwarsa:  detail.TglKedaluwarsa,
+		FotoURL:         detail.FotoURL,
+		DiperiksaOleh:   detail.DiperiksaOleh,
+		DiperiksaNama:   detail.DiperiksaNama,
+		NilaiPotongNota: detail.NilaiPotongNota,
+		SPPGID:          detail.SPPGID,
+		Catatan:         detail.Catatan,
+		DikoreksiOleh:   detail.DikoreksiOleh,
+		DikoreksiAt:     detail.DikoreksiAt,
+		CreatedAt:       detail.CreatedAt,
+		BatchQtyDipakai: detail.BatchQtyDipakai,
+		POStatus:        detail.POStatus,
+		PemasokID:       detail.PemasokID,
+		PemasokNama:     detail.PemasokNama,
+		PemasokNoHP:     detail.PemasokNoHP,
+	}
+}
