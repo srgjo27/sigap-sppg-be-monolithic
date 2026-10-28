@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -125,16 +126,39 @@ func (f *penerimaanFakePenerimaanRepo) List(ctx context.Context, sppgID int64, f
 
 func (f *penerimaanFakePenerimaanRepo) GetByID(ctx context.Context, id int64) (*domain.PenerimaanDetail, error) {
 	return &domain.PenerimaanDetail{
-		ID:          id,
-		NomorPO:     "PO/TST/202610/0001",
-		BahanNama:   "Bahan Test",
-		KodeLot:     "LOT-TST-20261027-001",
-		WaktuTerima: time.Now(),
-		QtyDiterima: 10,
-		Kondisi:     domain.KondisiBaik,
-		SPPGID:      1,
-		POStatus:    domain.POStatusDiterimaSebagian,
+		ID:            id,
+		POID:          1,
+		POItemID:      1,
+		NomorPO:       "PO/TST/202610/0001",
+		BahanNama:     "Bahan Test",
+		KodeLot:       "LOT-TST-20261027-001",
+		WaktuTerima:   time.Now(),
+		QtyDiterima:   10,
+		Kondisi:       domain.KondisiBaik,
+		SPPGID:        1,
+		DiperiksaOleh: 99,
+		POStatus:      domain.POStatusDiterimaSebagian,
 	}, nil
+}
+
+func (f *penerimaanFakePenerimaanRepo) KoreksiPenerimaan(ctx context.Context, id int64, in domain.KoreksiPenerimaanInput, disetujuiOleh int64, at time.Time) (*domain.PenerimaanDetail, *domain.PurchaseOrder, error) {
+	return &domain.PenerimaanDetail{
+		ID:            id,
+		POID:          1,
+		POItemID:      1,
+		NomorPO:       "PO/TST/202610/0001",
+		BahanNama:     "Bahan Test",
+		KodeLot:       "LOT-TST-20261027-001",
+		WaktuTerima:   time.Now(),
+		QtyDiterima:   *in.QtyDiterima,
+		QtyDitolak:    *in.QtyDitolak,
+		Kondisi:       *in.Kondisi,
+		SPPGID:        1,
+		DiperiksaOleh: 99,
+		POStatus:      domain.POStatusDiterimaSebagian,
+		DikoreksiOleh: &disetujuiOleh,
+		DikoreksiAt:   &at,
+	}, &domain.PurchaseOrder{ID: 1, Status: domain.POStatusDiterimaSebagian}, nil
 }
 
 type penerimaanFixture struct {
@@ -171,10 +195,13 @@ func newPenerimaanFixture() *penerimaanFixture {
 	return &penerimaanFixture{router: r, auth: authStore, svc: svc, authSvc: authSvc}
 }
 
+var seedCounter int
+
 func (f *penerimaanFixture) seedToken(t *testing.T, role authdomain.Role) string {
 	t.Helper()
-	email := "uji" + string(role) + "@test.local"
-	created, err := f.authSvc.CreateUser(context.Background(), &authdomain.Claims{UserID: 999, Role: authdomain.RoleAdmin}, authdomain.CreateUserInput{
+	seedCounter++
+	email := fmt.Sprintf("uji%d%s@test.local", seedCounter, role)
+	created, err := f.authSvc.CreateUser(context.Background(), &authdomain.Claims{UserID: int64(seedCounter), Role: authdomain.RoleAdmin}, authdomain.CreateUserInput{
 		Nama: string(role), Email: email, Peran: role, SPPGID: int64p2(1), PasswordAwal: strPtrLocal("pass1234"),
 	}, nil)
 	if err != nil {
@@ -266,6 +293,42 @@ func TestPenerimaan_HandlerContracts(t *testing.T) {
 		res := doPenerimaanRequest(t, f.router, "GET", "/api/v1/penerimaan/1", akuntan, "", nil)
 		if res.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d %s", res.Code, res.Body.String())
+		}
+	})
+
+	t.Run("POST /penerimaan/:id/koreksi by kepala_sppg -> 200", func(t *testing.T) {
+		kepala := f.seedToken(t, authdomain.RoleKepalaSPPG)
+		res := doPenerimaanRequest(t, f.router, "POST", "/api/v1/penerimaan/1/koreksi", kepala, "", map[string]any{
+			"alasan":       "perbaikan qty karena salah ketik",
+			"qty_diterima": 15,
+			"qty_ditolak":  0,
+			"kondisi":      "baik",
+			"catatan":      "perbaikan catatan",
+		})
+		if res.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d %s", res.Code, res.Body.String())
+		}
+	})
+
+	t.Run("POST /penerimaan/:id/koreksi by non-kepala -> 403", func(t *testing.T) {
+		res := doPenerimaanRequest(t, f.router, "POST", "/api/v1/penerimaan/1/koreksi", akuntan, "", map[string]any{
+			"alasan":       "perbaikan qty karena salah ketik",
+			"qty_diterima": 15,
+			"kondisi":      "baik",
+		})
+		if res.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d %s", res.Code, res.Body.String())
+		}
+	})
+
+	t.Run("POST /penerimaan/:id/koreksi without alasan -> 400", func(t *testing.T) {
+		kepala := f.seedToken(t, authdomain.RoleKepalaSPPG)
+		res := doPenerimaanRequest(t, f.router, "POST", "/api/v1/penerimaan/1/koreksi", kepala, "", map[string]any{
+			"qty_diterima": 15,
+			"kondisi":      "baik",
+		})
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d %s", res.Code, res.Body.String())
 		}
 	})
 }

@@ -293,6 +293,7 @@ type PenerimaanListItem struct {
 // PenerimaanDetail is the full detail of one receipt lot (MVP-003.9).
 type PenerimaanDetail struct {
 	ID              int64
+	POID            int64
 	POItemID        int64
 	NomorPO         string
 	BahanID         int64
@@ -339,6 +340,98 @@ func ValidatePenerimaanFilter(f PenerimaanFilter) error {
 			fields["sampai"] = "range must not exceed 31 days"
 		}
 	}
+	if len(fields) > 0 {
+		return &ValidationError{Fields: fields}
+	}
+	return nil
+}
+
+// KoreksiPenerimaanInput is the payload for correcting a receipt lot (MVP-003.10).
+// Only qty_diterima, qty_ditolak, alasan_tolak, kondisi, tgl_kedaluwarsa, catatan
+// can be corrected. Evidence fields (suhu_terima, lolos_suhu, foto_url,
+// waktu_terima, diperiksa_oleh, kode_lot) cannot be changed.
+// Alasan is the mandatory correction reason (10-500 characters).
+type KoreksiPenerimaanInput struct {
+	Alasan          *string  `json:"alasan"`
+	QtyDiterima     *float64 `json:"qty_diterima,omitempty"`
+	QtyDitolak      *float64 `json:"qty_ditolak,omitempty"`
+	AlasanTolak     *string  `json:"alasan_tolak,omitempty"`
+	Kondisi         *string  `json:"kondisi,omitempty"`
+	TglKedaluwarsa  *string  `json:"tgl_kedaluwarsa,omitempty"` // YYYY-MM-DD
+	Catatan         *string  `json:"catatan,omitempty"`
+	NilaiPotongNota float64  `json:"nilai_potong_nota,omitempty"`
+}
+
+// ValidateKoreksiPenerimaanInput validates field-level rules for koreksi.
+// At least one correctable field must be provided. Alasan is mandatory.
+func ValidateKoreksiPenerimaanInput(in KoreksiPenerimaanInput) error {
+	fields := map[string]string{}
+
+	// Alasan is mandatory, 10-500 characters.
+	if in.Alasan == nil {
+		fields["alasan"] = "required"
+	} else {
+		trimmed := strings.TrimSpace(*in.Alasan)
+		if len([]rune(trimmed)) < 10 || len([]rune(trimmed)) > 500 {
+			fields["alasan"] = "must be 10-500 characters"
+		}
+	}
+
+	// At least one correctable field must be provided.
+	hasField := false
+	if in.QtyDiterima != nil {
+		hasField = true
+		if *in.QtyDiterima < 0 {
+			fields["qty_diterima"] = "must be >= 0"
+		}
+	}
+	if in.QtyDitolak != nil {
+		hasField = true
+		if *in.QtyDitolak < 0 {
+			fields["qty_ditolak"] = "must be >= 0"
+		}
+	}
+	if in.AlasanTolak != nil {
+		hasField = true
+		if len(strings.TrimSpace(*in.AlasanTolak)) < 3 || len(strings.TrimSpace(*in.AlasanTolak)) > 500 {
+			fields["alasan_tolak"] = "must be 3-500 characters"
+		}
+	}
+	if in.Kondisi != nil {
+		hasField = true
+		if !validKondisi[*in.Kondisi] {
+			fields["kondisi"] = "must be baik, kurang, or rusak"
+		}
+	}
+	if in.TglKedaluwarsa != nil {
+		hasField = true
+		if _, err := time.Parse("2006-01-02", *in.TglKedaluwarsa); err != nil {
+			fields["tgl_kedaluwarsa"] = "must use YYYY-MM-DD"
+		}
+	}
+	if in.Catatan != nil {
+		hasField = true
+	}
+
+	if !hasField {
+		fields["items"] = "at least one correctable field must be provided"
+	}
+
+	// Cross-field: qty_ditolak > 0 requires alasan_tolak.
+	if in.QtyDitolak != nil && *in.QtyDitolak > 0 && in.AlasanTolak == nil {
+		fields["alasan_tolak"] = "required when qty_ditolak > 0"
+	}
+
+	// Cross-field: kondisi rusak with qty_diterima > 0 is not allowed.
+	if in.Kondisi != nil && *in.Kondisi == KondisiRusak && in.QtyDiterima != nil && *in.QtyDiterima > 0 {
+		fields["qty_diterima"] = "damaged item cannot be accepted (qty_diterima must be 0)"
+	}
+
+	// Cross-field: kondisi kurang requires catatan.
+	if in.Kondisi != nil && *in.Kondisi == KondisiKurang && in.Catatan == nil {
+		fields["catatan"] = "required when kondisi is kurang"
+	}
+
 	if len(fields) > 0 {
 		return &ValidationError{Fields: fields}
 	}

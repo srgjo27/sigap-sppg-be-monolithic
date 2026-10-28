@@ -78,6 +78,13 @@ type PenerimaanRepository interface {
 
 	// GetByID returns one receipt lot with its PO/item/bahan/pemasok context.
 	GetByID(ctx context.Context, id int64) (*domain.PenerimaanDetail, error)
+
+	// KoreksiPenerimaan corrects a receipt lot (MVP-003.10).
+	// Evidence fields (suhu_terima, lolos_suhu, foto_url, waktu_terima,
+	// diperiksa_oleh, kode_lot) cannot be changed. The lot must not be used
+	// in batch_bahan. The corrector must not be the original inspector.
+	// Returns the updated lot and the PO with recalculated status and rekap.
+	KoreksiPenerimaan(ctx context.Context, id int64, in domain.KoreksiPenerimaanInput, disetujuiOleh int64, at time.Time) (*domain.PenerimaanDetail, *domain.PurchaseOrder, error)
 }
 
 // SPPGProvider resolves SPPG info.

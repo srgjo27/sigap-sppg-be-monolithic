@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -196,4 +197,120 @@ func TestValidatePenerimaanFilter(t *testing.T) {
 	if err := ValidatePenerimaanFilter(f); err == nil {
 		t.Fatal("expected error for reversed date range")
 	}
+}
+
+func TestValidateKoreksiPenerimaanInput(t *testing.T) {
+	// Valid: alasan + qty_diterima.
+	valid := KoreksiPenerimaanInput{
+		Alasan:      strPtr("perbaikan qty karena salah ketik"),
+		QtyDiterima: ptrFloat64(10),
+	}
+	if err := ValidateKoreksiPenerimaanInput(valid); err != nil {
+		t.Fatalf("valid input should pass, got %v", err)
+	}
+
+	// Valid: alasan only with other fields nil (but hasField will be false... wait)
+	// Actually alasan alone without any other field should fail because hasField is false.
+	alasanOnly := KoreksiPenerimaanInput{
+		Alasan: strPtr("perbaikan qty karena salah ketik"),
+	}
+	if err := ValidateKoreksiPenerimaanInput(alasanOnly); err == nil {
+		t.Fatal("expected error for alasan only without any correctable field")
+	}
+
+	// Missing alasan.
+	noAlasan := KoreksiPenerimaanInput{
+		QtyDiterima: ptrFloat64(10),
+	}
+	if err := ValidateKoreksiPenerimaanInput(noAlasan); err == nil {
+		t.Fatal("expected error for missing alasan")
+	}
+
+	// Alasan too short (< 10 chars).
+	shortAlasan := KoreksiPenerimaanInput{
+		Alasan:      strPtr("fix"),
+		QtyDiterima: ptrFloat64(10),
+	}
+	if err := ValidateKoreksiPenerimaanInput(shortAlasan); err == nil {
+		t.Fatal("expected error for short alasan")
+	}
+
+	// Alasan too long (> 500 chars).
+	longAlasan := KoreksiPenerimaanInput{
+		Alasan:      strPtr(strings.Repeat("a", 501)),
+		QtyDiterima: ptrFloat64(10),
+	}
+	if err := ValidateKoreksiPenerimaanInput(longAlasan); err == nil {
+		t.Fatal("expected error for long alasan")
+	}
+
+	// qty_diterima negative.
+	negQty := KoreksiPenerimaanInput{
+		Alasan:      strPtr("perbaikan qty"),
+		QtyDiterima: ptrFloat64(-5),
+	}
+	if err := ValidateKoreksiPenerimaanInput(negQty); err == nil {
+		t.Fatal("expected error for negative qty_diterima")
+	}
+
+	// qty_ditolak > 0 without alasan_tolak.
+	noAlasanTolak := KoreksiPenerimaanInput{
+		Alasan:     strPtr("perbaikan qty"),
+		QtyDitolak: ptrFloat64(2),
+	}
+	if err := ValidateKoreksiPenerimaanInput(noAlasanTolak); err == nil {
+		t.Fatal("expected error for qty_ditolak without alasan_tolak")
+	}
+
+	// qty_ditolak > 0 with alasan_tolak -> valid.
+	withAlasanTolak := KoreksiPenerimaanInput{
+		Alasan:      strPtr("perbaikan qty"),
+		QtyDitolak:  ptrFloat64(2),
+		AlasanTolak: strPtr("barang rusak saat kirim"),
+	}
+	if err := ValidateKoreksiPenerimaanInput(withAlasanTolak); err != nil {
+		t.Fatalf("valid input with alasan_tolak should pass, got %v", err)
+	}
+
+	// kondisi rusak with qty_diterima > 0.
+	rusakDiterima := KoreksiPenerimaanInput{
+		Alasan:      strPtr("perbaikan kondisi"),
+		Kondisi:     strPtr(KondisiRusak),
+		QtyDiterima: ptrFloat64(5),
+	}
+	if err := ValidateKoreksiPenerimaanInput(rusakDiterima); err == nil {
+		t.Fatal("expected error for rusak with qty_diterima > 0")
+	}
+
+	// kondisi kurang without catatan.
+	kurangNoCatatan := KoreksiPenerimaanInput{
+		Alasan:  strPtr("perbaikan kondisi"),
+		Kondisi: strPtr(KondisiKurang),
+	}
+	if err := ValidateKoreksiPenerimaanInput(kurangNoCatatan); err == nil {
+		t.Fatal("expected error for kurang without catatan")
+	}
+
+	// Invalid kondisi.
+	badKondisi := KoreksiPenerimaanInput{
+		Alasan:  strPtr("perbaikan"),
+		Kondisi: strPtr("busuk"),
+	}
+	if err := ValidateKoreksiPenerimaanInput(badKondisi); err == nil {
+		t.Fatal("expected error for invalid kondisi")
+	}
+
+	// Invalid tgl_kedaluwarsa format.
+	badDate := KoreksiPenerimaanInput{
+		Alasan:         strPtr("perbaikan tanggal"),
+		TglKedaluwarsa: strPtr("27-10-2026"),
+	}
+	if err := ValidateKoreksiPenerimaanInput(badDate); err == nil {
+		t.Fatal("expected error for invalid tgl_kedaluwarsa format")
+	}
+}
+
+// ptrFloat64 returns a pointer to a float64.
+func ptrFloat64(v float64) *float64 {
+	return &v
 }

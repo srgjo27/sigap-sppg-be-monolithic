@@ -299,3 +299,205 @@ func (s *Service) GetPenerimaan(ctx context.Context, actor *authdomain.Claims, i
 func round2(v float64) float64 {
 	return float64(int64(v*100+0.5)) / 100
 }
+
+// requireKepalaSPPG allows only kepala_sppg to correct receipts.
+func requireKepalaSPPG(actor *authdomain.Claims) error {
+	if actor == nil {
+		return domain.ErrUnauthorized
+	}
+	if actor.Role != authdomain.RoleKepalaSPPG {
+		return domain.ErrForbidden
+	}
+	if actor.SPPGID == nil {
+		return domain.ErrForbidden
+	}
+	return nil
+}
+
+// KoreksiPenerimaanResult carries the corrected lot and the updated PO.
+type KoreksiPenerimaanResult struct {
+	Detail *domain.PenerimaanDetail
+	PO     *domain.PurchaseOrder
+}
+
+// KoreksiPenerimaan implements POST /penerimaan/{id}/koreksi (MVP-003.10).
+// Only kepala_sppg may correct. Evidence fields are immutable.
+// The lot must not be used in a production batch. The corrector cannot be
+// the original inspector. All MVP-003.8 rules still apply to the result.
+func (s *Service) KoreksiPenerimaan(ctx context.Context, actor *authdomain.Claims, id int64, in domain.KoreksiPenerimaanInput, ip *string) (*KoreksiPenerimaanResult, error) {
+	if err := requireKepalaSPPG(actor); err != nil {
+		return nil, err
+	}
+	if err := domain.ValidateKoreksiPenerimaanInput(in); err != nil {
+		return nil, err
+	}
+	sppgID := *actor.SPPGID
+	now := s.clock()
+	today := startOfDay(now)
+
+	// Load existing lot detail.
+	detail, err := s.penerimaan.GetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("get penerimaan: %w", err)
+	}
+	if detail == nil {
+		return nil, domain.ErrLotNotFound
+	}
+	if detail.SPPGID != sppgID {
+		return nil, domain.ErrLotNotFound
+	}
+
+	// Lot used in a production batch cannot be corrected.
+	if detail.BatchQtyDipakai > 0 {
+		return nil, domain.ErrLotUsedInBatch
+	}
+
+	// Inspector cannot correct their own receipt.
+	if detail.DiperiksaOleh == actor.UserID {
+		return nil, domain.ErrSelfCorrection
+	}
+
+	// Load PO item to get qty_pesan, harga_satuan, bahan_id, and PO ID.
+	itemsRes, err := s.po.ListItemsByPOIDs(ctx, []int64{detail.POID})
+	if err != nil {
+		return nil, fmt.Errorf("list po items: %w", err)
+	}
+	poItems := itemsRes[detail.POID]
+	if len(poItems) == 0 {
+		return nil, domain.ErrItemNotFound
+	}
+	poItem := poItems[0]
+
+	// Load PO for status check and ownership.
+	po, err := s.po.FindByID(ctx, detail.POID)
+	if err != nil {
+		return nil, fmt.Errorf("find po: %w", err)
+	}
+	if po == nil || po.SPPGID != sppgID {
+		return nil, domain.ErrPONotFound
+	}
+
+	// Load bahan for temperature/expiry checks.
+	bahan, err := s.bahan.FindByID(ctx, poItem.BahanID)
+	if err != nil {
+		return nil, fmt.Errorf("find bahan: %w", err)
+	}
+	if bahan == nil {
+		return nil, domain.ErrBahanNotFound
+	}
+
+	// Load current rekap for this po_item (includes this lot's current qty).
+	rekap, err := s.po.GetPOItemRekap(ctx, []int64{detail.POItemID})
+	if err != nil {
+		return nil, fmt.Errorf("get po item rekap: %w", err)
+	}
+	currentRekap := rekap[detail.POItemID]
+
+	// Determine new values (keep existing if not provided).
+	newQtyDiterima := detail.QtyDiterima
+	if in.QtyDiterima != nil {
+		newQtyDiterima = *in.QtyDiterima
+	}
+	newQtyDitolak := detail.QtyDitolak
+	if in.QtyDitolak != nil {
+		newQtyDitolak = *in.QtyDitolak
+	}
+	newKondisi := detail.Kondisi
+	if in.Kondisi != nil {
+		newKondisi = *in.Kondisi
+	}
+	newAlasanTolak := detail.AlasanTolak
+	if in.AlasanTolak != nil {
+		newAlasanTolak = in.AlasanTolak
+	}
+	newTglKedaluwarsa := detail.TglKedaluwarsa
+	if in.TglKedaluwarsa != nil {
+		t, err := time.Parse("2006-01-02", *in.TglKedaluwarsa)
+		if err != nil {
+			return nil, &domain.ValidationError{Fields: map[string]string{"tgl_kedaluwarsa": "must use YYYY-MM-DD"}}
+		}
+		newTglKedaluwarsa = &t
+	}
+	newCatatan := detail.Catatan
+	if in.Catatan != nil {
+		newCatatan = in.Catatan
+	}
+	newLolosSuhu := detail.LolosSuhu // immutable - keep existing
+
+	// Validate damaged goods: rusak cannot have qty_diterima > 0.
+	if newKondisi == domain.KondisiRusak && newQtyDiterima > 0 {
+		return nil, domain.ErrDamagedAccepted
+	}
+
+	// Temperature check: if mudah_rusak and lolos_suhu = false, qty_diterima must be 0.
+	if bahan.MudahRusak && newLolosSuhu != nil && !*newLolosSuhu && newQtyDiterima > 0 {
+		return nil, domain.ErrTemperatureExceeded
+	}
+
+	// Expiry check: if kedaluwarsa < today and qty_diterima > 0 → expired.
+	if newTglKedaluwarsa != nil && newTglKedaluwarsa.Before(today) && newQtyDiterima > 0 {
+		return nil, domain.ErrExpired
+	}
+
+	// Tolerance: new total for this po_item (excluding this lot's current qty, plus new qty)
+	// must not exceed qty_pesan * 1.10.
+	existingExcludingThis := currentRekap.QtyDiterima - detail.QtyDiterima
+	newTotal := existingExcludingThis + newQtyDiterima
+	if newTotal > poItem.QtyPesan*1.10 {
+		return nil, domain.ErrExceedsTolerance
+	}
+
+	// Nilai potong nota = round(qty_ditolak * harga_satuan, 2).
+	newNilaiPotongNota := round2(newQtyDitolak * poItem.HargaSatuan)
+
+	// Call repository to update in transaction.
+	updatedDetail, updatedPO, err := s.penerimaan.KoreksiPenerimaan(ctx, id, domain.KoreksiPenerimaanInput{
+		Alasan:          in.Alasan,
+		QtyDiterima:     &newQtyDiterima,
+		QtyDitolak:      &newQtyDitolak,
+		AlasanTolak:     newAlasanTolak,
+		Kondisi:         &newKondisi,
+		TglKedaluwarsa:  in.TglKedaluwarsa, // pass original string; repo stores it
+		Catatan:         newCatatan,
+		NilaiPotongNota: newNilaiPotongNota,
+	}, actor.UserID, now)
+	if err != nil {
+		return nil, fmt.Errorf("koreksi penerimaan: %w", err)
+	}
+
+	// Override computed fields (the repo stored what was passed; we computed values).
+	updatedDetail.QtyDiterima = newQtyDiterima
+	updatedDetail.QtyDitolak = newQtyDitolak
+	updatedDetail.AlasanTolak = newAlasanTolak
+	updatedDetail.TglKedaluwarsa = newTglKedaluwarsa
+	updatedDetail.Catatan = newCatatan
+	updatedDetail.Kondisi = newKondisi
+	updatedDetail.NilaiPotongNota = newNilaiPotongNota
+	updatedDetail.DikoreksiOleh = &actor.UserID
+	updatedDetail.DikoreksiAt = &now
+
+	// Audit log.
+	_ = s.audits.Append(ctx, &authdomain.AuditEntry{
+		UserID:    &actor.UserID,
+		Aksi:      authdomain.AuditUpdate,
+		Tabel:     "penerimaan_bahan",
+		RecordID:  &id,
+		DataBaru:  strPtr(mustJSON(map[string]any{"penerimaan_id": id, "po_id": detail.POID, "status": updatedPO.Status})),
+		IPAddress: ip,
+		CreatedAt: now,
+	})
+
+	// Notify akuntan that nilai tagihan may have changed.
+	if s.notifs != nil {
+		_ = s.notifs.NotifySPPGRoles(ctx, sppgID,
+			[]string{string(authdomain.RoleAkuntan)},
+			"penerimaan_dikoreksi", "Penerimaan bahan dikoreksi",
+			fmt.Sprintf("PO %s penerimaan telah dikoreksi", detail.NomorPO),
+			"penerimaan_bahan", id)
+	}
+
+	return &KoreksiPenerimaanResult{
+		Detail: updatedDetail,
+		PO:     updatedPO,
+	}, nil
+}

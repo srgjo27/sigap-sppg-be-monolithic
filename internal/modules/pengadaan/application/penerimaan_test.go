@@ -13,16 +13,18 @@ import (
 var _ PenerimaanRepository = (*fakePenerimaanRepo)(nil)
 
 type fakePenerimaanRepo struct {
-	lots       map[int64]*domain.PenerimaanBahan
-	nextID     int64
-	clientRefs map[string]bool
-	createErr  error
+	lots        map[int64]*domain.PenerimaanBahan
+	nextID      int64
+	clientRefs  map[string]bool
+	createErr   error
+	usedInBatch map[int64]bool // lot IDs used in batch_bahan
 }
 
 func newFakePenerimaanRepo() *fakePenerimaanRepo {
 	return &fakePenerimaanRepo{
-		lots:       make(map[int64]*domain.PenerimaanBahan),
-		clientRefs: make(map[string]bool),
+		lots:        make(map[int64]*domain.PenerimaanBahan),
+		clientRefs:  make(map[string]bool),
+		usedInBatch: make(map[int64]bool),
 	}
 }
 
@@ -90,22 +92,74 @@ func (f *fakePenerimaanRepo) List(ctx context.Context, sppgID int64, filter doma
 func (f *fakePenerimaanRepo) GetByID(ctx context.Context, id int64) (*domain.PenerimaanDetail, error) {
 	for _, lot := range f.lots {
 		if lot.ID == id {
+			batchQty := float64(0)
+			if f.usedInBatch[id] {
+				batchQty = 5
+			}
 			return &domain.PenerimaanDetail{
-				ID:          lot.ID,
-				POItemID:    lot.POItemID,
-				NomorPO:     "PO/TEST/202610/0001",
-				BahanNama:   "Bahan Test",
-				KodeLot:     lot.KodeLot,
-				WaktuTerima: lot.WaktuTerima,
-				QtyDiterima: lot.QtyDiterima,
-				QtyDitolak:  lot.QtyDitolak,
-				Kondisi:     lot.Kondisi,
-				SPPGID:      lot.SPPGID,
-				POStatus:    domain.POStatusDiterimaSebagian,
+				ID:              lot.ID,
+				POID:            1,
+				POItemID:        lot.POItemID,
+				NomorPO:         "PO/TEST/202610/0001",
+				BahanNama:       "Bahan Test",
+				KodeLot:         lot.KodeLot,
+				WaktuTerima:     lot.WaktuTerima,
+				QtyDiterima:     lot.QtyDiterima,
+				QtyDitolak:      lot.QtyDitolak,
+				Kondisi:         lot.Kondisi,
+				SPPGID:          lot.SPPGID,
+				DiperiksaOleh:   lot.DiperiksaOleh,
+				BatchQtyDipakai: batchQty,
+				POStatus:        domain.POStatusDiterimaSebagian,
 			}, nil
 		}
 	}
 	return nil, nil
+}
+
+func (f *fakePenerimaanRepo) KoreksiPenerimaan(ctx context.Context, id int64, in domain.KoreksiPenerimaanInput, disetujuiOleh int64, at time.Time) (*domain.PenerimaanDetail, *domain.PurchaseOrder, error) {
+	if f.createErr != nil {
+		return nil, nil, f.createErr
+	}
+	for _, lot := range f.lots {
+		if lot.ID == id {
+			if in.QtyDiterima != nil {
+				lot.QtyDiterima = *in.QtyDiterima
+			}
+			if in.QtyDitolak != nil {
+				lot.QtyDitolak = *in.QtyDitolak
+			}
+			if in.Kondisi != nil {
+				lot.Kondisi = *in.Kondisi
+			}
+			if in.AlasanTolak != nil {
+				lot.AlasanTolak = in.AlasanTolak
+			}
+			if in.Catatan != nil {
+				lot.Catatan = in.Catatan
+			}
+			lot.DikoreksiOleh = &disetujuiOleh
+			lot.DikoreksiAt = &at
+			lot.NilaiPotongNota = in.NilaiPotongNota
+			return &domain.PenerimaanDetail{
+				ID:            lot.ID,
+				POID:          1,
+				POItemID:      lot.POItemID,
+				NomorPO:       "PO/TEST/202610/0001",
+				BahanNama:     "Bahan Test",
+				KodeLot:       lot.KodeLot,
+				WaktuTerima:   lot.WaktuTerima,
+				QtyDiterima:   lot.QtyDiterima,
+				QtyDitolak:    lot.QtyDitolak,
+				Kondisi:       lot.Kondisi,
+				SPPGID:        lot.SPPGID,
+				POStatus:      domain.POStatusDiterimaSebagian,
+				DikoreksiOleh: lot.DikoreksiOleh,
+				DikoreksiAt:   lot.DikoreksiAt,
+			}, &domain.PurchaseOrder{ID: 1, Status: domain.POStatusDiterimaSebagian}, nil
+		}
+	}
+	return nil, nil, domain.ErrLotNotFound
 }
 
 // ---- fakes for other deps ----
@@ -339,3 +393,146 @@ func TestGetPenerimaan_NotFound(t *testing.T) {
 		t.Fatalf("expected ErrLotNotFound, got %v", err)
 	}
 }
+
+// ===== KoreksiPenerimaan tests =====
+
+func newKoreksiSvc() (*fakePenerimaanRepo, *Service) {
+	f := newFakePenerimaanRepo()
+	// Seed a lot that was inspected by user 99 (not the actor).
+	f.lots[1] = &domain.PenerimaanBahan{
+		ID:            1,
+		POItemID:      1,
+		KodeLot:       "LOT-TST-20261027-001",
+		QtyDiterima:   10,
+		QtyDitolak:    0,
+		Kondisi:       domain.KondisiBaik,
+		DiperiksaOleh: 99,
+		SPPGID:        1,
+		ClientRef:     "ref-1",
+		CreatedAt:     time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC),
+	}
+	svc := New(Deps{
+		Penerimaan: f,
+		PO:         &fakePORepo{},
+		Bahan:      &fakeBahanRepo{},
+		SPPG:       &fakeSPPGProvider{},
+		Audits:     &fakeAuditRepo{},
+		Notifs:     &fakeNotifRepo{},
+		Clock:      func() time.Time { return time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC) },
+	})
+	return f, svc
+}
+
+func TestKoreksiPenerimaan_Success(t *testing.T) {
+	_, svc := newKoreksiSvc()
+
+	actor := &authdomain.Claims{UserID: 7, Role: authdomain.RoleKepalaSPPG, SPPGID: int64Ptr(1)}
+	in := domain.KoreksiPenerimaanInput{
+		Alasan:      strPtr("perbaikan qty karena salah ketik"),
+		QtyDiterima: ptrFloat64(15),
+		QtyDitolak:  ptrFloat64(0),
+		Kondisi:     strPtr(domain.KondisiBaik),
+		Catatan:     strPtr("perbaikan catatan"),
+	}
+
+	res, err := svc.KoreksiPenerimaan(context.Background(), actor, 1, in, nil)
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if res.Detail.QtyDiterima != 15 {
+		t.Fatalf("expected qty_diterima=15, got %v", res.Detail.QtyDiterima)
+	}
+	if res.Detail.DikoreksiOleh == nil || *res.Detail.DikoreksiOleh != 7 {
+		t.Fatal("expected dikoreksi_oleh = 7")
+	}
+	if res.Detail.DikoreksiAt == nil {
+		t.Fatal("expected dikoreksi_at to be set")
+	}
+}
+
+func TestKoreksiPenerimaan_RequiresKepalaSPPG(t *testing.T) {
+	_, svc := newKoreksiSvc()
+
+	// Akuntan cannot koreksi.
+	akuntan := &authdomain.Claims{UserID: 7, Role: authdomain.RoleAkuntan, SPPGID: int64Ptr(1)}
+	_, err := svc.KoreksiPenerimaan(context.Background(), akuntan, 1, domain.KoreksiPenerimaanInput{
+		Alasan: strPtr("alasan yang cukup panjang untuk koreksi"),
+	}, nil)
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+
+	// Admin cannot koreksi.
+	admin := &authdomain.Claims{UserID: 8, Role: authdomain.RoleAdmin, SPPGID: int64Ptr(1)}
+	_, err = svc.KoreksiPenerimaan(context.Background(), admin, 1, domain.KoreksiPenerimaanInput{
+		Alasan: strPtr("alasan yang cukup panjang untuk koreksi"),
+	}, nil)
+	if !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("expected ErrForbidden, got %v", err)
+	}
+}
+
+func TestKoreksiPenerimaan_SelfCorrection(t *testing.T) {
+	_, svc := newKoreksiSvc()
+
+	// The lot was inspected by user 99. If actor is also 99, it's self-correction.
+	inspector := &authdomain.Claims{UserID: 99, Role: authdomain.RoleKepalaSPPG, SPPGID: int64Ptr(1)}
+	_, err := svc.KoreksiPenerimaan(context.Background(), inspector, 1, domain.KoreksiPenerimaanInput{
+		Alasan:  strPtr("alasan yang cukup panjang untuk koreksi"),
+		Catatan: strPtr("perbaikan catatan"),
+	}, nil)
+	if !errors.Is(err, domain.ErrSelfCorrection) {
+		t.Fatalf("expected ErrSelfCorrection, got %v", err)
+	}
+}
+
+func TestKoreksiPenerimaan_LotUsedInBatch(t *testing.T) {
+	f := newFakePenerimaanRepo()
+	// Seed a lot.
+	f.lots[1] = &domain.PenerimaanBahan{
+		ID:            1,
+		POItemID:      1,
+		KodeLot:       "LOT-TST-20261027-001",
+		QtyDiterima:   10,
+		QtyDitolak:    0,
+		Kondisi:       domain.KondisiBaik,
+		DiperiksaOleh: 99,
+		SPPGID:        1,
+		ClientRef:     "ref-1",
+	}
+	f.usedInBatch[1] = true // lot used in batch
+	svc := New(Deps{
+		Penerimaan: f,
+		PO:         &fakePORepo{},
+		Bahan:      &fakeBahanRepo{},
+		SPPG:       &fakeSPPGProvider{},
+		Audits:     &fakeAuditRepo{},
+		Notifs:     &fakeNotifRepo{},
+		Clock:      func() time.Time { return time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC) },
+	})
+
+	actor := &authdomain.Claims{UserID: 7, Role: authdomain.RoleKepalaSPPG, SPPGID: int64Ptr(1)}
+	_, err := svc.KoreksiPenerimaan(context.Background(), actor, 1, domain.KoreksiPenerimaanInput{
+		Alasan:  strPtr("alasan yang cukup panjang untuk koreksi"),
+		Catatan: strPtr("perbaikan catatan"),
+	}, nil)
+	if !errors.Is(err, domain.ErrLotUsedInBatch) {
+		t.Fatalf("expected ErrLotUsedInBatch, got %v", err)
+	}
+}
+
+func TestKoreksiPenerimaan_WrongSPPG(t *testing.T) {
+	_, svc := newKoreksiSvc()
+
+	actor := &authdomain.Claims{UserID: 7, Role: authdomain.RoleKepalaSPPG, SPPGID: int64Ptr(2)}
+	_, err := svc.KoreksiPenerimaan(context.Background(), actor, 1, domain.KoreksiPenerimaanInput{
+		Alasan:  strPtr("alasan yang cukup panjang untuk koreksi"),
+		Catatan: strPtr("perbaikan catatan"),
+	}, nil)
+	if !errors.Is(err, domain.ErrLotNotFound) {
+		t.Fatalf("expected ErrLotNotFound for wrong SPPG, got %v", err)
+	}
+}
+
+// ptrFloat64 returns a pointer to a float64 (helper for tests).
+func ptrFloat64(v float64) *float64 { return &v }

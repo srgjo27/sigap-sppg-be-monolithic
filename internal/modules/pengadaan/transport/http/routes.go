@@ -82,4 +82,8 @@ func RegisterRoutes(rg *gin.RouterGroup, h *Handler, mw *authhttp.Middleware) {
 	rg.POST("/purchase-orders/:id/penerimaan", mw.Authenticate(), freshPassword, readOnly, canCreatePenerimaan, h.CreatePenerimaan)
 	rg.GET("/penerimaan", mw.Authenticate(), freshPassword, readOnly, canReadPenerimaan, h.ListPenerimaan)
 	rg.GET("/penerimaan/:id", mw.Authenticate(), freshPassword, readOnly, canReadPenerimaan, h.GetPenerimaan)
+
+	canKoreksiPenerimaan := mw.RequireRoles(authdomain.RoleKepalaSPPG)
+
+	rg.POST("/penerimaan/:id/koreksi", mw.Authenticate(), freshPassword, readOnly, canKoreksiPenerimaan, h.KoreksiPenerimaan)
 }

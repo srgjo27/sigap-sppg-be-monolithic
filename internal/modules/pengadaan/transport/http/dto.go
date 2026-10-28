@@ -688,3 +688,45 @@ func toPenerimaanDetailResponse(detail *domain.PenerimaanDetail) PenerimaanDetai
 		PemasokNoHP:     detail.PemasokNoHP,
 	}
 }
+
+// ===== Koreksi Penerimaan DTOs (MVP-003.10) =====
+
+type KoreksiPenerimaanRequest struct {
+	Alasan         *string  `json:"alasan"`
+	QtyDiterima    *float64 `json:"qty_diterima,omitempty"`
+	QtyDitolak     *float64 `json:"qty_ditolak,omitempty"`
+	AlasanTolak    *string  `json:"alasan_tolak,omitempty"`
+	Kondisi        *string  `json:"kondisi,omitempty"`
+	TglKedaluwarsa *string  `json:"tgl_kedaluwarsa,omitempty"`
+	Catatan        *string  `json:"catatan,omitempty"`
+}
+
+type KoreksiPenerimaanResponse struct {
+	Lot PenerimaanDetailResponse `json:"lot"`
+	PO  KoreksiPOResponse        `json:"po"`
+}
+
+type KoreksiPOResponse struct {
+	ID                int64   `json:"id"`
+	NomorPO           string  `json:"nomor_po"`
+	Status            string  `json:"status"`
+	TotalPesanan      float64 `json:"total_pesanan"`
+	TotalNilaiDikirim float64 `json:"total_nilai_dikirim"`
+	TotalPotongNota   float64 `json:"total_potong_nota"`
+	TotalTagihan      float64 `json:"total_tagihan"`
+}
+
+func toKoreksiPenerimaanResponse(detail *domain.PenerimaanDetail, po *domain.PurchaseOrder) KoreksiPenerimaanResponse {
+	return KoreksiPenerimaanResponse{
+		Lot: toPenerimaanDetailResponse(detail),
+		PO: KoreksiPOResponse{
+			ID:                po.ID,
+			NomorPO:           po.NomorPO,
+			Status:            po.Status,
+			TotalPesanan:      po.Total,
+			TotalNilaiDikirim: 0,
+			TotalPotongNota:   0,
+			TotalTagihan:      0,
+		},
+	}
+}

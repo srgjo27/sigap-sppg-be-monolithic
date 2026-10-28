@@ -1593,7 +1593,7 @@ func (p *PenerimaanPostgres) List(ctx context.Context, sppgID int64, filter doma
 // GetByID returns one receipt lot with full detail.
 func (p *PenerimaanPostgres) GetByID(ctx context.Context, id int64) (*domain.PenerimaanDetail, error) {
 	const q = `
-		SELECT pb.id, pb.po_item_id, po.nomor_po, b.id as bahan_id, b.nama as bahan_nama, b.satuan as bahan_satuan,
+		SELECT pb.id, pb.po_item_id, po.id as po_id, po.nomor_po, b.id as bahan_id, b.nama as bahan_nama, b.satuan as bahan_satuan,
 			pb.kode_lot, pb.waktu_terima, pb.qty_diterima, pb.qty_ditolak, pb.alasan_tolak,
 			pb.suhu_terima, pb.kondisi, pb.tgl_kedaluwarsa, pb.foto_url, pb.diperiksa_oleh,
 			u.nama as diperiksa_nama, pb.nilai_potong_nota, pb.sppg_id, pb.client_ref,
@@ -1617,7 +1617,7 @@ func (p *PenerimaanPostgres) GetByID(ctx context.Context, id int64) (*domain.Pen
 	var fotoURL sql.NullString
 	var diperiksaNama sql.NullString
 	if err := p.Pool.QueryRow(ctx, q, id).Scan(
-		&d.ID, &d.POItemID, &d.NomorPO, &d.BahanID, &d.BahanNama, &d.BahanSatuan,
+		&d.ID, &d.POItemID, &d.POID, &d.NomorPO, &d.BahanID, &d.BahanNama, &d.BahanSatuan,
 		&d.KodeLot, &d.WaktuTerima, &d.QtyDiterima, &d.QtyDitolak, &alasanTolak,
 		&suhuTerima, &d.Kondisi, &tglKedaluwarsa, &fotoURL, &d.DiperiksaOleh,
 		&diperiksaNama, &d.NilaiPotongNota, &d.SPPGID, &d.ClientRef,
@@ -1659,6 +1659,146 @@ func (p *PenerimaanPostgres) GetByID(ctx context.Context, id int64) (*domain.Pen
 		d.LolosSuhu = &lolosSuhu.Bool
 	}
 	return &d, nil
+}
+
+// KoreksiPenerimaan corrects a receipt lot in a single transaction.
+// Evidence fields (suhu_terima, lolos_suhu, foto_url, waktu_terima,
+// diperiksa_oleh, kode_lot) are not changed. PO status is recalculated:
+// all items terpenuhi → selesai, else → diterima_sebagian.
+// A manually closed PO (ditutup) stays selesai.
+func (p *PenerimaanPostgres) KoreksiPenerimaan(ctx context.Context, id int64, in domain.KoreksiPenerimaanInput, disetujuiOleh int64, at time.Time) (*domain.PenerimaanDetail, *domain.PurchaseOrder, error) {
+	tx, err := p.Pool.Begin(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Lock the lot row for update.
+	var poID, poItemID int64
+	var currentPOStatus string
+	var ditutupOleh sql.NullInt64
+	err = tx.QueryRow(ctx, `
+		SELECT pb.po_item_id, pi.po_id, po.status, po.ditutup_oleh
+		FROM penerimaan_bahan pb
+		JOIN po_item pi ON pi.id = pb.po_item_id
+		JOIN purchase_order po ON po.id = pi.po_id
+		WHERE pb.id = $1
+		FOR UPDATE`, id).Scan(&poItemID, &poID, &currentPOStatus, &ditutupOleh)
+	if err != nil {
+		if isNoRows(err) {
+			return nil, nil, domain.ErrLotNotFound
+		}
+		return nil, nil, fmt.Errorf("lock lot: %w", err)
+	}
+
+	// Build the update. Only correctable fields change; evidence fields stay.
+	const updateQ = `
+		UPDATE penerimaan_bahan
+		SET qty_diterima = $2, qty_ditolak = $3, alasan_tolak = $4,
+			kondisi = $5, tgl_kedaluwarsa = $6, catatan = $7,
+			nilai_potong_nota = $8, dikoreksi_oleh = $9, dikoreksi_at = $10
+		WHERE id = $1
+		RETURNING ` + penerimaanColumns
+
+	var alasanTolak any = nullableStr(in.AlasanTolak)
+	var tglKedaluwarsa any
+	if in.TglKedaluwarsa != nil {
+		t := *in.TglKedaluwarsa
+		tglKedaluwarsa = t
+	} else {
+		tglKedaluwarsa = nil
+	}
+	var catatan any = nullableStr(in.Catatan)
+
+	row := tx.QueryRow(ctx, updateQ,
+		id, in.QtyDiterima, in.QtyDitolak, alasanTolak, in.Kondisi,
+		tglKedaluwarsa, catatan, in.NilaiPotongNota, disetujuiOleh, at,
+	)
+	_, scanErr := scanPenerimaan(row)
+	if scanErr != nil {
+		return nil, nil, fmt.Errorf("update penerimaan_bahan: %w", scanErr)
+	}
+
+	// Recalculate PO status.
+	// Get all items' rekap for this PO.
+	allItemRows, err := tx.Query(ctx, `SELECT id FROM po_item WHERE po_id=$1`, poID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list all po items: %w", err)
+	}
+	var allItemIDs []int64
+	for allItemRows.Next() {
+		var itemID int64
+		if err := allItemRows.Scan(&itemID); err != nil {
+			allItemRows.Close()
+			return nil, nil, fmt.Errorf("scan po item id: %w", err)
+		}
+		allItemIDs = append(allItemIDs, itemID)
+	}
+	allItemRows.Close()
+
+	allRekap, err := getPOItemRekapTx(ctx, tx, allItemIDs)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get all rekap: %w", err)
+	}
+
+	allTerpenuhi := true
+	for _, itemID := range allItemIDs {
+		r := allRekap[itemID]
+		if !r.Terpenuhi {
+			allTerpenuhi = false
+			break
+		}
+	}
+
+	var newStatus string
+	if allTerpenuhi {
+		newStatus = domain.POStatusSelesai
+	} else {
+		newStatus = domain.POStatusDiterimaSebagian
+	}
+
+	// If PO was manually closed (ditutup_oleh set) and currently selesai,
+	// it stays selesai even if koreksi makes items incomplete.
+	if currentPOStatus == domain.POStatusSelesai && ditutupOleh.Valid {
+		newStatus = domain.POStatusSelesai
+	}
+
+	// Only update status if it changed (avoid unnecessary write).
+	if newStatus != currentPOStatus {
+		const statusQ = `UPDATE purchase_order SET status=$1::po_status, updated_at=now()
+			WHERE id=$2 RETURNING ` + poColumns
+		updatedPO, err := scanPO(tx.QueryRow(ctx, statusQ, newStatus, poID))
+		if err != nil {
+			if isNoRows(err) {
+				return nil, nil, domain.ErrPOInvalidStatus
+			}
+			return nil, nil, fmt.Errorf("update po status: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, nil, fmt.Errorf("commit koreksi: %w", err)
+		}
+		// Fetch full detail (includes re-calculated fields).
+		detail, err := p.GetByID(ctx, id)
+		if err != nil {
+			return nil, nil, fmt.Errorf("get updated detail: %w", err)
+		}
+		return detail, updatedPO, nil
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, nil, fmt.Errorf("commit koreksi: %w", err)
+	}
+	// Fetch full detail.
+	detail, err := p.GetByID(ctx, id)
+	if err != nil {
+		return nil, nil, fmt.Errorf("get updated detail: %w", err)
+	}
+	// Return current PO (unchanged status).
+	updatedPO, err := findPOSTx(ctx, tx, poID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return detail, updatedPO, nil
 }
 
 // Helpers used by PenerimaanPostgres

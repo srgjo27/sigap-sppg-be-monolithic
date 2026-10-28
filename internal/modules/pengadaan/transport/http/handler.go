@@ -707,3 +707,32 @@ func (h *Handler) GetPenerimaan(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, resp)
 }
+
+// KoreksiPenerimaan handles POST /api/v1/penerimaan/{id}/koreksi (MVP-003.10).
+func (h *Handler) KoreksiPenerimaan(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		MapError(c, domain.ErrLotNotFound)
+		return
+	}
+	var req KoreksiPenerimaanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		MapError(c, &domain.ValidationError{Fields: map[string]string{"body": "invalid JSON"}})
+		return
+	}
+	claims, _ := authhttp.CurrentUser(c)
+	res, err := h.svc.KoreksiPenerimaan(c.Request.Context(), claims, id, domain.KoreksiPenerimaanInput{
+		Alasan:         req.Alasan,
+		QtyDiterima:    req.QtyDiterima,
+		QtyDitolak:     req.QtyDitolak,
+		AlasanTolak:    req.AlasanTolak,
+		Kondisi:        req.Kondisi,
+		TglKedaluwarsa: req.TglKedaluwarsa,
+		Catatan:        req.Catatan,
+	}, clientIP(c))
+	if err != nil {
+		MapError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toKoreksiPenerimaanResponse(res.Detail, res.PO))
+}
