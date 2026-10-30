@@ -46,12 +46,11 @@ func (r Role) Valid() bool {
 }
 
 // CanManageUsers reports whether the role may create/update user accounts
-// (MVP-001.1, MVP-001.5).
 func (r Role) CanManageUsers() bool {
 	return r == RoleAdmin || r == RoleKepalaSPPG
 }
 
-// CanViewAuditLogs reports whether the role may read audit logs (MVP-001.7).
+// CanViewAuditLogs reports whether the role may read audit logs.
 func (r Role) CanViewAuditLogs() bool {
 	return r == RoleAdmin || r == RoleKepalaSPPG || r == RolePengawas
 }

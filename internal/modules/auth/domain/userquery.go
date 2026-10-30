@@ -2,14 +2,14 @@ package domain
 
 import "strings"
 
-// Sort options for GET /users (MVP-002.8).
+// Sort options for GET /users.
 const (
 	UserSortNama         = "nama"
 	UserSortMinusCreated = "-created_at"
 	UserSortMinusLogin   = "-last_login_at"
 )
 
-// UserFilter scopes GET /users (MVP-002.8).
+// UserFilter scopes GET /users.
 type UserFilter struct {
 	Q         *string
 	Peran     []Role
@@ -22,7 +22,7 @@ type UserFilter struct {
 	Limit     int
 }
 
-// UserScope enforces MVP-002.8 visibility.
+// UserScope enforces visibility.
 // A nil SPPGID lists across all SPPG (admin); otherwise results are
 // restricted to one SPPG. ExcludePrivileged hides admin and pengawas
 // accounts from kepala_sppg results.

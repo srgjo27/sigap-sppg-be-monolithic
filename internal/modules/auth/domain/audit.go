@@ -32,7 +32,7 @@ type AuditEntry struct {
 	CreatedAt time.Time
 }
 
-// AuditFilter scopes GET /audit-logs (MVP-001.7).
+// AuditFilter scopes GET /audit-logs.
 type AuditFilter struct {
 	Aksi     *string
 	Tabel    *string

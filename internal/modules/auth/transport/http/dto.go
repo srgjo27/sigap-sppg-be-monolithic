@@ -8,7 +8,7 @@ import (
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/domain"
 )
 
-// CreateUserRequest is POST /api/v1/users input (MVP-001.1).
+// CreateUserRequest is POST /api/v1/users input.
 type CreateUserRequest struct {
 	Nama         string  `json:"nama" binding:"required"`
 	Email        string  `json:"email" binding:"required"`
@@ -53,7 +53,7 @@ type LoginUserBrief struct {
 	SekolahID *int64 `json:"sekolah_id,omitempty"`
 }
 
-// LoginResponse is the MVP-001.2 success payload.
+// LoginResponse is success payload.
 type LoginResponse struct {
 	AccessToken        string         `json:"access_token"`
 	RefreshToken       string         `json:"refresh_token"`
@@ -85,7 +85,7 @@ type NamedRef struct {
 	Nama string `json:"nama"`
 }
 
-// MeResponse is GET /api/v1/auth/me (MVP-001.4).
+// MeResponse is GET /api/v1/auth/me.
 type MeResponse struct {
 	ID                 int64     `json:"id"`
 	Nama               string    `json:"nama"`
@@ -122,14 +122,14 @@ type ChangePasswordRequest struct {
 	PasswordBaru string `json:"password_baru" binding:"required"`
 }
 
-// AuditUserRef is the nested actor in audit responses (MVP-001.7).
+// AuditUserRef is the nested actor in audit responses.
 type AuditUserRef struct {
 	ID    int64  `json:"id"`
 	Nama  string `json:"nama"`
 	Peran string `json:"peran"`
 }
 
-// AuditLogItem is one audit row (MVP-001.7).
+// AuditLogItem is one audit row.
 type AuditLogItem struct {
 	ID        int64           `json:"id"`
 	User      *AuditUserRef   `json:"user,omitempty"`
@@ -221,7 +221,7 @@ func toAuditItem(v application.AuditLogView) AuditLogItem {
 	return item
 }
 
-// UserListItem is one row in GET /users (MVP-002.8): display columns only
+// UserListItem is one row in GET /users: display columns only
 // (nama, email, peran, penempatan as SPPG name, status, last log).
 // Secrets (password_hash, tokens, failure counters) are never included.
 type UserListItem struct {
@@ -239,7 +239,7 @@ type UserListResponse struct {
 	Meta PageMeta       `json:"meta"`
 }
 
-// UserDetailResponse is GET /users/{id} (MVP-002.8).
+// UserDetailResponse is GET /users/{id}.
 type UserDetailResponse struct {
 	ID                 int64      `json:"id"`
 	Nama               string     `json:"nama"`
