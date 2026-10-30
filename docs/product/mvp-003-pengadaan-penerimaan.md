@@ -768,6 +768,7 @@ kepala\_sppg
   - toleransi 10% tetap berlaku
   - barang rusak tetap tidak boleh diterima
 - server menghitung ulang `nilai_potong_nota` dan status PO. PO `selesai` hasil otomatis bisa kembali ke `diterima_sebagian`; PO yang ditutup manual tetap `selesai`.
+- pembaruan penerimaan, penghitungan status PO, dan pembacaan hasil respons dilakukan dalam satu transaksi. Hasil dibaca sebelum commit, termasuk ketika status PO tetap sama; kegagalan pembacaan hasil membatalkan perubahan.
 - server mengisi `dikoreksi_oleh` dan `dikoreksi_at`; nilai lama, nilai baru, dan alasan dicatat di audit\_log
 - akuntan menerima notifikasi `penerimaan_dikoreksi` karena nilai tagihan bisa berubah
 - mulai M8: koreksi ditolak bila PO sudah masuk laporan siklus dana berstatus `dilaporkan` atau `ditutup`
