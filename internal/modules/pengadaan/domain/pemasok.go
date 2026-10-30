@@ -1,7 +1,6 @@
 package domain
 
 import (
-	"math"
 	"regexp"
 	"strings"
 	"time"
@@ -164,14 +163,4 @@ func ValidateUpdatePemasok(in UpdatePemasokInput) error {
 		return &ValidationError{Fields: fields}
 	}
 	return nil
-}
-
-// IsValidJenisUsaha reports whether j is allowed.
-func IsValidJenisUsaha(j string) bool {
-	return allowedJenisUsaha[j]
-}
-
-// RoundToTwoDecimals rounds a float64 to 2 decimal places.
-func RoundToTwoDecimals(v float64) float64 {
-	return math.Round(v*100) / 100
 }

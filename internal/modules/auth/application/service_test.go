@@ -37,10 +37,6 @@ func newTestFixture() *testFixture {
 	return f
 }
 
-func (f *testFixture) advance(d time.Duration) {
-	f.now = f.now.Add(d)
-}
-
 // clearWajib clears wajib_ganti_password so refresh flows can be tested
 // independently of the first-login gate.
 func (f *testFixture) clearWajib(t *testing.T, userID int64) {

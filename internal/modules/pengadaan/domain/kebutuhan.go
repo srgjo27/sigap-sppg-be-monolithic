@@ -144,16 +144,6 @@ func NormalizeSatuanQty(satuan string, qty float64) float64 {
 	return math.Round(qty*100) / 100
 }
 
-// ParseDate parses YYYY-MM-DD string to time.Time.
-func ParseDate(s string) (time.Time, error) {
-	return time.Parse("2006-01-02", s)
-}
-
-// FormatDate formats time.Time to YYYY-MM-DD.
-func FormatDate(t time.Time) string {
-	return t.Format("2006-01-02")
-}
-
 // ValidateSatuanForQty validates qty matches satuan rules.
 func ValidateSatuanForQty(satuan string, qty float64) error {
 	if satuan == "butir" || satuan == "pcs" {

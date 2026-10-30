@@ -245,17 +245,6 @@ type CreatePORequest struct {
 	Items           []POItemRequest `json:"items" binding:"required,min=1,max=50"`
 }
 
-type POFilter struct {
-	Status         []string `form:"status"`
-	PemasokID      *int64   `form:"pemasok_id"`
-	TglKirimDari   string   `form:"tgl_kirim_dari"`   // YYYY-MM-DD
-	TglKirimSampai string   `form:"tgl_kirim_sampai"` // YYYY-MM-DD
-	Q              string   `form:"q"`
-	SPPGID         *int64   `form:"sppg_id"` // only for admin/pengawas
-	Page           int      `form:"page,default=1"`
-	PerPage        int      `form:"per_page,default=20"`
-}
-
 type POItemResponse struct {
 	ID              int64   `json:"id"`
 	BahanID         int64   `json:"bahan_id"`
@@ -529,8 +518,6 @@ func derefString(s *string) string {
 	return *s
 }
 
-// ===== Penerimaan DTOs (MVP-003.8, MVP-003.9) =====
-
 type PenerimaanItemRequest struct {
 	POItemID        int64    `json:"po_item_id" binding:"required"`
 	QtyDiterima     float64  `json:"qty_diterima" binding:"required,gte=0"`
@@ -644,17 +631,6 @@ func toPenerimaanListItemResponse(item domain.PenerimaanListItem) PenerimaanList
 	}
 }
 
-func toPenerimaanListResponse(res *application.PenerimaanListResult) PenerimaanListResponse {
-	data := make([]PenerimaanListItemResponse, len(res.Data))
-	for i, item := range res.Data {
-		data[i] = toPenerimaanListItemResponse(item)
-	}
-	return PenerimaanListResponse{
-		Data: data,
-		Meta: PageMeta{Page: res.Meta.Page, PerPage: res.Meta.PerPage, Total: res.Meta.Total},
-	}
-}
-
 func toPenerimaanDetailResponse(detail *domain.PenerimaanDetail) PenerimaanDetailResponse {
 	return PenerimaanDetailResponse{
 		ID:              detail.ID,
@@ -689,7 +665,7 @@ func toPenerimaanDetailResponse(detail *domain.PenerimaanDetail) PenerimaanDetai
 	}
 }
 
-// ===== Koreksi Penerimaan DTOs (MVP-003.10) =====
+// ===== Koreksi Penerimaan DTOs =====
 
 type KoreksiPenerimaanRequest struct {
 	Alasan         *string  `json:"alasan"`

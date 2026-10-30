@@ -252,9 +252,3 @@ func (u *User) RecordSuccessfulLogin(now time.Time) {
 	u.LastLoginAt = &now
 	u.UpdatedAt = now
 }
-
-// MaxFailedAttempts exposes the lockout threshold for tests/docs.
-func MaxFailedAttempts() int { return maxFailedAttempts }
-
-// LockoutDuration exposes the lockout window for tests/docs.
-func LockoutDuration() time.Duration { return lockoutDuration }

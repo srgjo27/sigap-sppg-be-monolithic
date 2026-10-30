@@ -505,7 +505,7 @@ func (h *Handler) TutupPurchaseOrder(c *gin.Context) {
 	c.JSON(http.StatusOK, toPOTransitionResponse(res.Detail, nil, res.ItemTidakTerpenuhi))
 }
 
-// CreatePenerimaan handles POST /api/v1/purchase-orders/{id}/penerimaan (MVP-003.8).
+// CreatePenerimaan handles POST /api/v1/purchase-orders/{id}/penerimaan.
 func (h *Handler) CreatePenerimaan(c *gin.Context) {
 	poID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -591,7 +591,7 @@ func (h *Handler) CreatePenerimaan(c *gin.Context) {
 	})
 }
 
-// ListPenerimaan handles GET /api/v1/penerimaan (MVP-003.9).
+// ListPenerimaan handles GET /api/v1/penerimaan.
 func (h *Handler) ListPenerimaan(c *gin.Context) {
 	claims, _ := authhttp.CurrentUser(c)
 	filter := domain.PenerimaanFilter{}
@@ -688,7 +688,7 @@ func (h *Handler) ListPenerimaan(c *gin.Context) {
 	})
 }
 
-// GetPenerimaan handles GET /api/v1/penerimaan/{id} (MVP-003.9).
+// GetPenerimaan handles GET /api/v1/penerimaan/{id}.
 func (h *Handler) GetPenerimaan(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -708,7 +708,7 @@ func (h *Handler) GetPenerimaan(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-// KoreksiPenerimaan handles POST /api/v1/penerimaan/{id}/koreksi (MVP-003.10).
+// KoreksiPenerimaan handles POST /api/v1/penerimaan/{id}/koreksi.
 func (h *Handler) KoreksiPenerimaan(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {

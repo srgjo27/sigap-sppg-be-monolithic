@@ -54,16 +54,6 @@ type MenuBahan struct {
 	GramPerPorsi float64
 }
 
-// MenuFilter scopes GET /menus.
-type MenuFilter struct {
-	Dari   time.Time
-	Sampai time.Time
-	Status *string
-	SPPGID *int64
-	Page   int
-	Limit  int
-}
-
 // BahanFilter scopes GET /bahan.
 type BahanFilter struct {
 	Q        *string
@@ -166,7 +156,7 @@ var validKondisi = map[string]bool{
 	KondisiRusak:  true,
 }
 
-// PenerimaanItem is one item in a penerimaan request (MVP-003.8).
+// PenerimaanItem is one item in a penerimaan request.
 type PenerimaanItem struct {
 	POItemID        int64    `json:"po_item_id"`
 	QtyDiterima     float64  `json:"qty_diterima"`
@@ -181,7 +171,7 @@ type PenerimaanItem struct {
 	NilaiPotongNota float64  `json:"nilai_potong_nota,omitempty"`
 }
 
-// CreatePenerimaanInput is the payload for creating receipt lots (MVP-003.8).
+// CreatePenerimaanInput is the payload for creating receipt lots.
 // ClientRef comes from the Idempotency-Key header (transport sets it).
 type CreatePenerimaanInput struct {
 	Items     []PenerimaanItem `json:"items"`
@@ -290,7 +280,7 @@ type PenerimaanListItem struct {
 	NilaiPotongNota float64
 }
 
-// PenerimaanDetail is the full detail of one receipt lot (MVP-003.9).
+// PenerimaanDetail is the full detail of one receipt lot.
 type PenerimaanDetail struct {
 	ID              int64
 	POID            int64
@@ -346,7 +336,7 @@ func ValidatePenerimaanFilter(f PenerimaanFilter) error {
 	return nil
 }
 
-// KoreksiPenerimaanInput is the payload for correcting a receipt lot (MVP-003.10).
+// KoreksiPenerimaanInput is the payload for correcting a receipt lot.
 // Only qty_diterima, qty_ditolak, alasan_tolak, kondisi, tgl_kedaluwarsa, catatan
 // can be corrected. Evidence fields (suhu_terima, lolos_suhu, foto_url,
 // waktu_terima, diperiksa_oleh, kode_lot) cannot be changed.
@@ -577,13 +567,6 @@ type PODetailMenu struct {
 	ID       int64
 	Tanggal  time.Time
 	NamaMenu string
-}
-
-// POCreateResult is the result of creating a PO.
-type POCreateResult struct {
-	PO       *PurchaseOrder
-	Items    []POItem
-	Warnings []string
 }
 
 // ValidateUpdatePOInput checks the PATCH envelope shape.

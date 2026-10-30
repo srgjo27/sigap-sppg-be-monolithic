@@ -5,9 +5,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	authdomain "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/domain"
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/pengadaan/domain"
 )
+
+// penerimaanNamespace is a fixed namespace UUID for generating deterministic
+// client_ref UUIDs from Idempotency-Key strings.
+var penerimaanNamespace = uuid.MustParse("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 
 // requirePenerimaanActor allows akuntan and petugas_dapur to record penerimaan.
 func requirePenerimaanActor(actor *authdomain.Claims) error {
@@ -41,7 +46,7 @@ type PenerimaanDetailResult struct {
 	Detail *domain.PenerimaanDetail
 }
 
-// CreatePenerimaan implements POST /purchase-orders/{id}/penerimaan (MVP-003.8).
+// CreatePenerimaan implements POST /purchase-orders/{id}/penerimaan.
 // Actor must be akuntan or petugas_dapur; sppg from token.
 // Idempotency: clientRef (Idempotency-Key) -> penerimaan_bahan.client_ref.
 func (s *Service) CreatePenerimaan(ctx context.Context, actor *authdomain.Claims, poID int64, in domain.CreatePenerimaanInput, ip *string) (*PenerimaanCreateResult, error) {
@@ -181,6 +186,9 @@ func (s *Service) CreatePenerimaan(ctx context.Context, actor *authdomain.Claims
 		})
 	}
 
+	// Convert Idempotency-Key string to UUID for client_ref column (UUID type).
+	in.ClientRef = uuid.NewSHA1(penerimaanNamespace, []byte(in.ClientRef)).String()
+
 	// Create lots in one transaction (insert + berkas claim + PO status).
 	lots, updatedPO, err := s.penerimaan.CreatePenerimaan(ctx, poID, in, actor.UserID, now)
 	if err != nil {
@@ -240,7 +248,7 @@ func (s *Service) CreatePenerimaan(ctx context.Context, actor *authdomain.Claims
 	}, nil
 }
 
-// ListPenerimaan implements GET /penerimaan (MVP-003.9).
+// ListPenerimaan implements GET /penerimaan.
 func (s *Service) ListPenerimaan(ctx context.Context, actor *authdomain.Claims, filter domain.PenerimaanFilter) (*PenerimaanListResult, error) {
 	if actor == nil {
 		return nil, domain.ErrUnauthorized
@@ -274,7 +282,7 @@ func (s *Service) ListPenerimaan(ctx context.Context, actor *authdomain.Claims, 
 	return &PenerimaanListResult{Data: items, Meta: PageMeta{Page: filter.Page, PerPage: filter.Limit, Total: total}}, nil
 }
 
-// GetPenerimaan implements GET /penerimaan/{id} (MVP-003.9).
+// GetPenerimaan implements GET /penerimaan/{id}.
 func (s *Service) GetPenerimaan(ctx context.Context, actor *authdomain.Claims, id int64) (*PenerimaanDetailResult, error) {
 	if actor == nil {
 		return nil, domain.ErrUnauthorized
@@ -320,10 +328,10 @@ type KoreksiPenerimaanResult struct {
 	PO     *domain.PurchaseOrder
 }
 
-// KoreksiPenerimaan implements POST /penerimaan/{id}/koreksi (MVP-003.10).
+// KoreksiPenerimaan implements POST /penerimaan/{id}/koreksi.
 // Only kepala_sppg may correct. Evidence fields are immutable.
 // The lot must not be used in a production batch. The corrector cannot be
-// the original inspector. All MVP-003.8 rules still apply to the result.
+// the original inspector. Rules still apply to the result.
 func (s *Service) KoreksiPenerimaan(ctx context.Context, actor *authdomain.Claims, id int64, in domain.KoreksiPenerimaanInput, ip *string) (*KoreksiPenerimaanResult, error) {
 	if err := requireKepalaSPPG(actor); err != nil {
 		return nil, err

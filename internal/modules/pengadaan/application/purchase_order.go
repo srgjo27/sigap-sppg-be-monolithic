@@ -150,7 +150,7 @@ func bahanItems(items []domain.POItemInput) map[int64]domain.POItemInput {
 }
 
 // generateWarnings generates warnings for PO creation.
-func (s *Service) generateWarnings(ctx context.Context, sppgID int64, po *domain.PurchaseOrder, items []domain.POItem, menuIDs []int64, bahanMap map[int64]domain.POItemInput) []string {
+func (s *Service) generateWarnings(ctx context.Context, sppgID int64, po *domain.PurchaseOrder, items []domain.POItem, menuIDs []int64, _ map[int64]domain.POItemInput) []string {
 	var warnings []string
 
 	// Warning 1: qty_pesan exceeds qty_sisa from kebutuhan by more than 20% for linked menus
@@ -218,7 +218,7 @@ func (s *Service) generateWarnings(ctx context.Context, sppgID int64, po *domain
 }
 
 // findFirstMenuDateForBahan finds the earliest menu date that uses a bahan among the given menu IDs.
-func (s *Service) findFirstMenuDateForBahan(ctx context.Context, sppgID int64, bahanID int64, menuIDs []int64) (*time.Time, error) {
+func (s *Service) findFirstMenuDateForBahan(ctx context.Context, _ int64, bahanID int64, menuIDs []int64) (*time.Time, error) {
 	if len(menuIDs) == 0 {
 		return nil, nil
 	}

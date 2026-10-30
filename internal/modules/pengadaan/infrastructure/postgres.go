@@ -1191,10 +1191,12 @@ func NewPenerimaanPostgres(pool *pgxpool.Pool) *PenerimaanPostgres {
 	return &PenerimaanPostgres{Pool: pool}
 }
 
-const penerimaanColumns = `pb.id, pb.po_item_id, pb.kode_lot, pb.waktu_terima, pb.qty_diterima, pb.qty_ditolak,
-	pb.alasan_tolak, pb.suhu_terima, pb.kondisi, pb.tgl_kedaluwarsa, pb.foto_url,
-	pb.diperiksa_oleh, pb.nilai_potong_nota, pb.sppg_id, pb.client_ref, pb.lolos_suhu,
-	pb.catatan, pb.dikoreksi_oleh, pb.dikoreksi_at, pb.created_at`
+// penerimaanColumnsInsert is the same column list without the "pb." table
+// alias prefix, for use in INSERT ... RETURNING clauses.
+const penerimaanColumnsInsert = `id, po_item_id, kode_lot, waktu_terima, qty_diterima, qty_ditolak,
+	alasan_tolak, suhu_terima, kondisi, tgl_kedaluwarsa, foto_url,
+	diperiksa_oleh, nilai_potong_nota, sppg_id, client_ref, lolos_suhu,
+	catatan, dikoreksi_oleh, dikoreksi_at, created_at`
 
 func scanPenerimaan(row interface{ Scan(...any) error }) (*domain.PenerimaanBahan, error) {
 	var p domain.PenerimaanBahan
@@ -1261,7 +1263,7 @@ func (p *PenerimaanPostgres) CreatePenerimaan(ctx context.Context, poID int64, i
 			pb.catatan, pb.dikoreksi_oleh, pb.dikoreksi_at, pb.created_at
 		FROM penerimaan_bahan pb
 		JOIN po_item pi ON pi.id = pb.po_item_id
-		WHERE pb.client_ref = $1 AND pi.po_id = $2`
+		WHERE pb.client_ref::text = $1 AND pi.po_id = $2`
 	rows, err := tx.Query(ctx, idemQ, in.ClientRef, poID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("check idempotency: %w", err)
@@ -1381,7 +1383,7 @@ func (p *PenerimaanPostgres) CreatePenerimaan(ctx context.Context, poID int64, i
 				 diperiksa_oleh, nilai_potong_nota, sppg_id, client_ref,
 				 lolos_suhu, catatan)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-			RETURNING ` + penerimaanColumns
+			RETURNING ` + penerimaanColumnsInsert
 		var alasanTolak any = nullableStr(it.AlasanTolak)
 		var suhuTerima any = nullableFloat(it.SuhuTerima)
 		var tglKedaluwarsa any
@@ -1395,7 +1397,7 @@ func (p *PenerimaanPostgres) CreatePenerimaan(ctx context.Context, poID int64, i
 
 		row := tx.QueryRow(ctx, insertQ,
 			it.POItemID, kodeLot, at, it.QtyDiterima, it.QtyDitolak,
-			alasanTolak, suhuTerima, it.Kondisi, tglKedaluwarsa, it.FotoBerkasID,
+			alasanTolak, suhuTerima, it.Kondisi, tglKedaluwarsa, strconv.FormatInt(it.FotoBerkasID, 10),
 			diperiksaOleh, nilaiPotongNota, sppgID, in.ClientRef,
 			lolosSuhu, catatan,
 		)
@@ -1479,7 +1481,7 @@ func (p *PenerimaanPostgres) CreatePenerimaan(ctx context.Context, poID int64, i
 
 // List returns filtered receipt lots for the SPPG.
 func (p *PenerimaanPostgres) List(ctx context.Context, sppgID int64, filter domain.PenerimaanFilter) ([]domain.PenerimaanListItem, int, error) {
-	where := `WHERE pb.sppg_id = $1`
+	where := ` WHERE pb.sppg_id = $1`
 	args := []any{sppgID}
 	argIdx := 2
 
@@ -1520,9 +1522,9 @@ func (p *PenerimaanPostgres) List(ctx context.Context, sppgID int64, filter doma
 	}
 	if filter.Tersedia != nil && *filter.Tersedia {
 		// tersedia: qty_sisa > 0, kondisi != rusak, tgl_kedaluwarsa null or >= today
-		where += fmt.Sprintf(" AND (pb.qty_diterima - COALESCE((SELECT SUM(bb.qty_dipakai) FROM batch_bahan bb WHERE bb.penerimaan_id = pb.id), 0)) > 0")
-		where += fmt.Sprintf(" AND pb.kondisi <> 'rusak'")
-		where += fmt.Sprintf(" AND (pb.tgl_kedaluwarsa IS NULL OR pb.tgl_kedaluwarsa >= CURRENT_DATE)")
+		where += " AND (pb.qty_diterima - COALESCE((SELECT SUM(bb.qty_dipakai) FROM batch_bahan bb WHERE bb.penerimaan_id = pb.id), 0)) > 0"
+		where += " AND pb.kondisi <> 'rusak'"
+		where += " AND (pb.tgl_kedaluwarsa IS NULL OR pb.tgl_kedaluwarsa >= CURRENT_DATE)"
 	}
 
 	countQ := `SELECT COUNT(*) FROM penerimaan_bahan pb
@@ -1698,7 +1700,7 @@ func (p *PenerimaanPostgres) KoreksiPenerimaan(ctx context.Context, id int64, in
 			kondisi = $5, tgl_kedaluwarsa = $6, catatan = $7,
 			nilai_potong_nota = $8, dikoreksi_oleh = $9, dikoreksi_at = $10
 		WHERE id = $1
-		RETURNING ` + penerimaanColumns
+		RETURNING ` + penerimaanColumnsInsert
 
 	var alasanTolak any = nullableStr(in.AlasanTolak)
 	var tglKedaluwarsa any

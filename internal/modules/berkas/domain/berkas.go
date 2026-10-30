@@ -75,7 +75,7 @@ func BuildObjectKey(kodeSPPG, konteks, ext string, t time.Time, randReader io.Re
 		// crypto/rand only fails here on a broken OS entropy source;
 		// fall back to a time-derived suffix so callers still get a
 		// shaped key (uniqueness is enforced by object_key UNIQUE).
-		buf = []byte(fmt.Sprintf("%016X", t.UnixNano()))
+		buf = fmt.Appendf(nil, "%016X", t.UnixNano())
 	}
 	suffix := hex.EncodeToString(buf) // 32 lowercase hex chars
 	return fmt.Sprintf("%s/%s/%04d/%02d/%02d/%s.%s",
