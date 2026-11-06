@@ -34,10 +34,10 @@ type MenuRepository interface {
 	DeleteMenu(ctx context.Context, id int64) error
 	// IsMenuUsed reports whether the menu is referenced by batch_produksi.
 	IsMenuUsed(ctx context.Context, menuID int64) (bool, error)
-	// SetApproval flips status plus approver columns atomically (MVP-002.5).
+	// SetApproval flips status plus approver columns atomically.
 	// A nil approver/approvedAt clears the approval (revert to draf).
 	SetApproval(ctx context.Context, id int64, status string, approver *int64, approvedAt *time.Time) (*domain.Menu, error)
-	// CreateMenus stores several menus with items in one transaction (MVP-002.7).
+	// CreateMenus stores several menus with items in one transaction.
 	// Either all rows persist or none. len(menus) must equal len(items).
 	CreateMenus(ctx context.Context, menus []*domain.Menu, items [][]domain.MenuBahan) ([]*domain.Menu, [][]domain.MenuBahan, error)
 }

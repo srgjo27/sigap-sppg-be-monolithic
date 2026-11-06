@@ -159,7 +159,7 @@ func (p *Postgres) CountActiveKepala(ctx context.Context, sppgID int64, excludeI
 	return n, nil
 }
 
-// userListOrder maps an allowlisted sort key to ORDER BY (MVP-002.8).
+// userListOrder maps an allowlisted sort key to ORDER BY.
 func userListOrder(sort string) string {
 	switch sort {
 	case domain.UserSortMinusCreated:
@@ -171,7 +171,7 @@ func userListOrder(sort string) string {
 	}
 }
 
-// ListUsers returns paginated users for GET /users (MVP-002.8).
+// ListUsers returns paginated users for GET /users.
 func (p *Postgres) ListUsers(ctx context.Context, filter domain.UserFilter, scope domain.UserScope) ([]domain.User, int, error) {
 	filter.Normalize()
 	where := `WHERE ($1::text IS NULL OR lower(nama) LIKE '%'||lower($1)||'%' OR lower(email) LIKE '%'||lower($1)||'%')` +
@@ -227,7 +227,7 @@ func (p *Postgres) ListUsers(ctx context.Context, filter domain.UserFilter, scop
 	return out, total, nil
 }
 
-// CountActiveSessions counts usable refresh tokens (MVP-002.8 detail).
+// CountActiveSessions counts usable refresh tokens (detail).
 func (p *Postgres) CountActiveSessions(ctx context.Context, userID int64, now time.Time) (int, error) {
 	const q = `SELECT COUNT(*) FROM refresh_token WHERE user_id=$1 AND revoked_at IS NULL AND expires_at > $2`
 	var n int
@@ -350,21 +350,22 @@ func (p *Postgres) Append(ctx context.Context, e *domain.AuditEntry) error {
 // List returns paginated audit entries with optional SPPG scoping.
 func (p *Postgres) List(ctx context.Context, filter domain.AuditFilter, scopeSPPGID *int64) ([]domain.AuditEntry, int, error) {
 	filter.Normalize()
-	where := `WHERE ($5::bigint IS NULL OR u.sppg_id=$5) AND ($1::text IS NULL OR a.aksi=$1) AND ($2::text IS NULL OR a.tabel=$2) AND ($3::bigint IS NULL OR a.user_id=$3)` +
-		` AND ($8::bigint IS NULL OR a.record_id=$8) AND ($9::timestamptz IS NULL OR a.created_at>=$9) AND ($10::timestamptz IS NULL OR a.created_at<=$10)`
+	// Placeholders: $1=aksi, $2=tabel, $3=user_id, $4=scopeSPPGID, $5=record_id, $6=dari, $7=sampai
+	where := `WHERE ($4::bigint IS NULL OR u.sppg_id=$4) AND ($1::text IS NULL OR a.aksi=$1) AND ($2::text IS NULL OR a.tabel=$2) AND ($3::bigint IS NULL OR a.user_id=$3)` +
+		` AND ($5::bigint IS NULL OR a.record_id=$5) AND ($6::timestamptz IS NULL OR a.created_at>=$6) AND ($7::timestamptz IS NULL OR a.created_at<=$7)`
 	countQ := `SELECT COUNT(*) FROM audit_log a LEFT JOIN users u ON u.id=a.user_id ` + where
 	var total int
 	if err := p.Pool.QueryRow(ctx, countQ,
-		nullableStr(filter.Aksi), nullableStr(filter.Tabel), nullableInt(filter.UserID), nil, nullableInt(scopeSPPGID),
-		nil, nil, nullableInt(filter.RecordID), nullableTime(filter.Dari), nullableTime(filter.Sampai),
+		nullableStr(filter.Aksi), nullableStr(filter.Tabel), nullableInt(filter.UserID),
+		nullableInt(scopeSPPGID), nullableInt(filter.RecordID), nullableTime(filter.Dari), nullableTime(filter.Sampai),
 	).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count audit: %w", err)
 	}
 	var listQ = `SELECT a.id, a.user_id, a.aksi, a.tabel, a.record_id, a.data_lama::text, a.data_baru::text, a.ip_address::text, a.created_at
-		FROM audit_log a LEFT JOIN users u ON u.id=a.user_id ` + where + ` ORDER BY a.id DESC LIMIT $11 OFFSET $12`
+		FROM audit_log a LEFT JOIN users u ON u.id=a.user_id ` + where + ` ORDER BY a.id DESC LIMIT $8 OFFSET $9`
 	rows, err := p.Pool.Query(ctx, listQ,
-		nullableStr(filter.Aksi), nullableStr(filter.Tabel), nullableInt(filter.UserID), nil, nullableInt(scopeSPPGID),
-		nil, nil, nullableInt(filter.RecordID), nullableTime(filter.Dari), nullableTime(filter.Sampai),
+		nullableStr(filter.Aksi), nullableStr(filter.Tabel), nullableInt(filter.UserID),
+		nullableInt(scopeSPPGID), nullableInt(filter.RecordID), nullableTime(filter.Dari), nullableTime(filter.Sampai),
 		filter.Limit, filter.Offset(),
 	)
 	if err != nil {

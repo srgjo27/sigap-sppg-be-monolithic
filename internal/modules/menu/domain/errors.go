@@ -27,7 +27,7 @@ type ValidationError struct {
 func (e *ValidationError) Error() string { return "validation failed" }
 
 // MenuDateConflictError carries the conflicting target date for copy (409).
-// Unlike ErrMenuExists it names the date, as required by MVP-002.7.
+// Unlike ErrMenuExists it names the date, as required.
 type MenuDateConflictError struct {
 	Tanggal string
 }

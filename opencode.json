@@ -7,5 +7,18 @@
       "mode": "primary",
       "description": "Primary Go + Gin backend orchestrator"
     }
+  },
+  "permission": {
+    "read": {
+      "*": "allow",
+      "*.env": "ask",
+      "*.env.*": "ask"
+    },
+    "grep": "ask",
+    "shell": "ask",
+    "edit": {
+      "*.env": "deny",
+      "*.env.*": "deny"
+    }
   }
 }

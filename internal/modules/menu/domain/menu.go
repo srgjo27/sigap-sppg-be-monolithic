@@ -35,10 +35,10 @@ type MenuBahan struct {
 	GramPerPorsi float64
 }
 
-// MenuStatusDraf is the only status assigned at creation (MVP-002.2).
+// MenuStatusDraf is the only status assigned at creation.
 const MenuStatusDraf = "draf"
 
-// MenuStatusDisetujui marks an approved menu (MVP-002.5).
+// MenuStatusDisetujui marks an approved menu.
 const MenuStatusDisetujui = "disetujui"
 
 // IsValidMenuStatus reports whether s is a known menu status.
@@ -76,7 +76,7 @@ func truncDate(t time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
 }
 
-// ValidateCreateMenu enforces MVP-002.2 rules that do not need the database.
+// ValidateCreateMenu enforces rules that do not need the database.
 // today is the current date used to reject past tanggal.
 func ValidateCreateMenu(in CreateMenuInput, today time.Time) error {
 	fields := map[string]string{}
@@ -152,7 +152,7 @@ func ValidateCreateMenu(in CreateMenuInput, today time.Time) error {
 	return nil
 }
 
-// MenuFilter scopes GET /menus (MVP-002.3).
+// MenuFilter scopes GET /menus.
 type MenuFilter struct {
 	Dari   time.Time
 	Sampai time.Time
@@ -202,9 +202,9 @@ func MissingDates(dari, sampai time.Time, present map[string]bool) []string {
 	return out
 }
 
-// UpdateMenuInput is the domain patch for PATCH /menus/{id} (MVP-002.4).
+// UpdateMenuInput is the domain patch for PATCH /menus/{id}.
 // Nil pointers mean no change. Tanggal is intentionally absent: it cannot
-// be changed; use copy (MVP-002.7) then delete.
+// be changed; use copythen delete.
 type UpdateMenuInput struct {
 	NamaMenu     *string
 	EnergiKkal   *float64
@@ -230,7 +230,7 @@ func checkGiziField(v *float64, max float64, name string, fields map[string]stri
 	}
 }
 
-// ValidateUpdateMenu enforces MVP-002.4 rules without database access.
+// ValidateUpdateMenu enforces rules without database access.
 func ValidateUpdateMenu(in UpdateMenuInput) error {
 	fields := map[string]string{}
 	if in.NamaMenu != nil && !ValidateMenuNama(*in.NamaMenu) {
@@ -280,7 +280,7 @@ func ValidateUpdateMenu(in UpdateMenuInput) error {
 	return nil
 }
 
-// MenuComplete reports whether a draft is approvable (MVP-002.5):
+// MenuComplete reports whether a draft is approvable:
 // at least 1 composition item and complete per-portion nutrition.
 func MenuComplete(m *Menu, items []MenuBahan) bool {
 	if m == nil || len(items) == 0 {
@@ -289,7 +289,7 @@ func MenuComplete(m *Menu, items []MenuBahan) bool {
 	return m.EnergiKkal > 0 && m.ProteinG > 0 && m.KarbohidratG > 0 && m.LemakG > 0
 }
 
-// ValidateRevertReason enforces the required revert alasan (MVP-002.5).
+// ValidateRevertReason enforces the required revert alasan.
 func ValidateRevertReason(alasan string) error {
 	if strings.TrimSpace(alasan) == "" {
 		return &ValidationError{Fields: map[string]string{"alasan": "required"}}
@@ -297,7 +297,7 @@ func ValidateRevertReason(alasan string) error {
 	return nil
 }
 
-// ValidateKebutuhanParams validates simulation params (MVP-002.6).
+// ValidateKebutuhanParams validates simulation params.
 func ValidateKebutuhanParams(target *int, cadangan *float64) error {
 	fields := map[string]string{}
 	if target != nil && *target <= 0 {
@@ -331,7 +331,7 @@ func Ceil2(v float64) float64 {
 	return math.Ceil(v*100-1e-9) / 100
 }
 
-// ComputeKebutuhan applies the MVP-002.6 formula:
+// ComputeKebutuhan applies the formula:
 // total_gram = gram_per_porsi × target × (1 + cadangan/100),
 // qty = total_gram ÷ gram_per_satuan, rounded up (2dp; whole for butir/pcs).
 func ComputeKebutuhan(gramPerPorsi float64, satuan string, gramPerSatuan float64, target int, cadanganPersen float64) (totalGram, qty float64) {
@@ -353,7 +353,7 @@ type CopyMenuInput struct {
 	TanggalTujuan []time.Time
 }
 
-// ValidateCopyMenuInput enforces MVP-002.7 rules without database access:
+// ValidateCopyMenuInput enforces rules without database access:
 // 1–7 target dates, no duplicates, none in the past.
 func ValidateCopyMenuInput(in CopyMenuInput, today time.Time) error {
 	if len(in.TanggalTujuan) == 0 {

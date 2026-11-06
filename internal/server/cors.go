@@ -6,10 +6,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// DefaultCORSOrigins allows the local frontend dev server (Vite on 5173).
-// Production origins come from CORS_ALLOWED_ORIGINS instead.
-var DefaultCORSOrigins = []string{"http://localhost:5173"}
-
 // CORS answers cross-origin requests from allowlisted origins only.
 // The request Origin is echoed back (never "*") so credentialed calls
 // (Authorization header) keep working without opening the API to any site.

@@ -12,6 +12,7 @@ PostgreSQL database for SIGAP SPPG backend.
 - pemasok
 - menu
 - purchase_order
+- po_nomor_terpakai
 - penerimaan_bahan
 - batch_produksi
 - checklist_sop
@@ -50,6 +51,7 @@ PostgreSQL database for SIGAP SPPG backend.
 | siklus_dana has many purchase_order | 1 : N | purchase_order.siklus_id | PO dibiayai dari siklus dana tertentu |
 | purchase_order has many transaksi_dana | 1 : N | transaksi_dana.po_id | Pembayaran bahan baku wajib merujuk PO |
 | users has many audit_log & notifikasi | 1 : N | audit_log.user_id, notifikasi.user_id | Siapa mengubah apa, dan siapa menerima peringatan |
+| sppg has many po_nomor_terpakai | 1 : N | po_nomor_terpakai.sppg_id | Reservasi nomor PO per SPPG; nomor yang pernah diterbitkan (termasuk dari PO yang dihapus) tidak dipakai ulang (MVP-003.5) |
 
 ## Rules
 

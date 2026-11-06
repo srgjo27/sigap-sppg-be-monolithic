@@ -156,7 +156,7 @@ func (m *MemoryStores) EmailExists(ctx context.Context, email string, excludeID 
 	return true, nil
 }
 
-// CountActiveKepala implements UserRepository (MVP-001.5 last-kepala guard).
+// CountActiveKepala implements UserRepository (last-kepala guard).
 func (m *MemoryStores) CountActiveKepala(ctx context.Context, sppgID int64, excludeID *int64) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -172,7 +172,7 @@ func (m *MemoryStores) CountActiveKepala(ctx context.Context, sppgID int64, excl
 	return n, nil
 }
 
-// ListUsers implements UserRepository for GET /users (MVP-002.8).
+// ListUsers implements UserRepository for GET /users.
 func (m *MemoryStores) ListUsers(ctx context.Context, filter domain.UserFilter, scope domain.UserScope) ([]domain.User, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -257,7 +257,7 @@ func (m *MemoryStores) ListUsers(ctx context.Context, filter domain.UserFilter, 
 	return out[start:end], total, nil
 }
 
-// CountActiveSessions implements RefreshTokenRepository (MVP-002.8 detail).
+// CountActiveSessions implements RefreshTokenRepository (detail).
 func (m *MemoryStores) CountActiveSessions(ctx context.Context, userID int64, now time.Time) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -337,7 +337,7 @@ func (m *MemoryStores) FindLatestActive(ctx context.Context, userID int64) (*dom
 	return best, nil
 }
 
-// RevokeAllExcept implements RefreshTokenRepository (MVP-001.6 keep-current).
+// RevokeAllExcept implements RefreshTokenRepository (keep-current).
 func (m *MemoryStores) RevokeAllExcept(ctx context.Context, userID int64, keepHash string, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

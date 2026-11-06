@@ -20,7 +20,7 @@ type Bahan struct {
 	UpdatedAt      time.Time
 }
 
-// Allowed bahan kategori (MVP-002.1).
+// Allowed bahan kategori.
 var allowedKategori = map[string]bool{
 	"karbohidrat":    true,
 	"protein_hewani": true,
@@ -31,7 +31,7 @@ var allowedKategori = map[string]bool{
 	"lainnya":        true,
 }
 
-// Allowed bahan satuan (MVP-002.1).
+// Allowed bahan satuan.
 var allowedSatuan = map[string]bool{
 	"kg":    true,
 	"liter": true,
@@ -93,7 +93,7 @@ func ResolveGramPerSatuan(satuan string, in *float64) (float64, bool) {
 	return 0, false
 }
 
-// ValidateCreateBahan enforces MVP-002.1 rules without database access.
+// ValidateCreateBahan enforces rules without database access.
 func ValidateCreateBahan(in CreateBahanInput) error {
 	fields := map[string]string{}
 	if !ValidateBahanNama(in.Nama) {

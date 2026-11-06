@@ -7,14 +7,18 @@ import (
 
 	"github.com/srgjo27/sigap-sppg-be-monolithic/internal/config"
 	authhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/auth/transport/http"
+	berkashttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/berkas/transport/http"
 	menuhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/menu/transport/http"
+	pengadaanhttp "github.com/srgjo27/sigap-sppg-be-monolithic/internal/modules/pengadaan/transport/http"
 )
 
 // Deps wires module handlers into the Gin engine.
 type Deps struct {
-	AuthHandler    *authhttp.Handler
-	AuthMiddleware *authhttp.Middleware
-	MenuHandler    *menuhttp.Handler
+	AuthHandler      *authhttp.Handler
+	AuthMiddleware   *authhttp.Middleware
+	MenuHandler      *menuhttp.Handler
+	PengadaanHandler *pengadaanhttp.Handler
+	BerkasHandler    *berkashttp.Handler
 }
 
 // New constructs the Gin engine with health and versioned API routes.
@@ -31,6 +35,14 @@ func New(cfg config.Config, deps Deps) *gin.Engine {
 		authhttp.RegisterRoutes(v1, deps.AuthHandler, deps.AuthMiddleware)
 		if deps.MenuHandler != nil {
 			menuhttp.RegisterRoutes(v1, deps.MenuHandler, deps.AuthMiddleware)
+		}
+		if deps.PengadaanHandler != nil {
+			pengadaanhttp.RegisterRoutes(v1, deps.PengadaanHandler, deps.AuthMiddleware)
+		}
+		// Berkas (upload) hanya ter-registrasi bila object storage
+		// dikonfigurasi — dev tanpa storage tetap bisa booting.
+		if deps.BerkasHandler != nil {
+			berkashttp.RegisterRoutes(v1, deps.BerkasHandler, deps.AuthMiddleware)
 		}
 	}
 

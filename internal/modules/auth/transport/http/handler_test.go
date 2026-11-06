@@ -71,7 +71,7 @@ func seedAdminAndLogin(t *testing.T, f *httpFixture, sppg *int64, email, passwor
 		t.Fatalf("seed: %v", err)
 	}
 	// Seed admins simulate users who already changed their initial password,
-	// otherwise the wajib_ganti_password gate (MVP-001.6) blocks management APIs.
+	// otherwise the wajib_ganti_password gate blocks management APIs.
 	clearWajib(t, f, created.User.ID)
 	login, err := f.svc.Login(ctx, email, password, nil, nil)
 	if err != nil {

@@ -19,7 +19,7 @@ type AccountLockedError struct {
 
 func (e *AccountLockedError) Error() string { return domain.ErrAccountLocked.Error() }
 
-// Service orchestrates MVP-001 use cases.
+// Service orchestrates use cases.
 type Service struct {
 	users      UserRepository
 	refresh    RefreshTokenRepository
@@ -81,7 +81,7 @@ type CreateUserResult struct {
 	GeneratedPassword *string
 }
 
-// CreateUser implements MVP-001.1.
+// CreateUser implements.
 func (s *Service) CreateUser(ctx context.Context, actor *domain.Claims, in domain.CreateUserInput, ip *string) (*CreateUserResult, error) {
 	if actor == nil {
 		return nil, domain.ErrUnauthorized
@@ -164,7 +164,7 @@ func (s *Service) CreateUser(ctx context.Context, actor *domain.Claims, in domai
 	return res, nil
 }
 
-// LoginResult is the MVP-001.2 success payload.
+// LoginResult is success payload.
 type LoginResult struct {
 	AccessToken        string
 	RefreshToken       string
@@ -173,7 +173,7 @@ type LoginResult struct {
 	User               *domain.User
 }
 
-// Login implements MVP-001.2 with lockout and audit.
+// Login implements with lockout and audit.
 func (s *Service) Login(ctx context.Context, email, password string, ip *string, userAgent *string) (*LoginResult, error) {
 	now := s.clock()
 	normalized := domain.NormalizeEmail(email)
@@ -265,14 +265,14 @@ func (s *Service) Login(ctx context.Context, email, password string, ip *string,
 	}, nil
 }
 
-// RefreshResult carries rotated tokens (MVP-001.3).
+// RefreshResult carries rotated tokens.
 type RefreshResult struct {
 	AccessToken  string
 	RefreshToken string
 	ExpiresIn    int64
 }
 
-// Refresh rotates a refresh token (MVP-001.3).
+// Refresh rotates a refresh token.
 // Reuse of a revoked token triggers theft detection: all sessions revoked.
 func (s *Service) Refresh(ctx context.Context, plainRefresh string, ip *string, userAgent *string) (*RefreshResult, error) {
 	now := s.clock()
@@ -356,7 +356,7 @@ func (s *Service) Refresh(ctx context.Context, plainRefresh string, ip *string, 
 	}, nil
 }
 
-// Logout revokes a refresh token (MVP-001.3). Idempotent.
+// Logout revokes a refresh token. Idempotent.
 func (s *Service) Logout(ctx context.Context, plainRefresh string, ip *string) error {
 	now := s.clock()
 	if plainRefresh == "" {
@@ -384,7 +384,7 @@ func (s *Service) Logout(ctx context.Context, plainRefresh string, ip *string) e
 	return nil
 }
 
-// LogoutAll revokes every session of a user (MVP-001.3 ?all=true).
+// LogoutAll revokes every session of a user (?all=true).
 func (s *Service) LogoutAll(ctx context.Context, userID int64, ip *string) error {
 	now := s.clock()
 	if err := s.refresh.RevokeAllForUser(ctx, userID, now); err != nil {
@@ -402,7 +402,7 @@ func (s *Service) LogoutAll(ctx context.Context, userID int64, ip *string) error
 	return nil
 }
 
-// Profile is the enriched MVP-001.4 current-user payload.
+// Profile is the enriched current-user payload.
 type Profile struct {
 	User        *domain.User
 	SPPG        *domain.SPPGInfo
@@ -410,7 +410,7 @@ type Profile struct {
 	Permissions []string
 }
 
-// Me returns the active profile plus permissions (MVP-001.4).
+// Me returns the active profile plus permissions.
 // Data comes from the database so role/status changes apply immediately.
 func (s *Service) Me(ctx context.Context, userID int64) (*Profile, error) {
 	u, err := s.users.FindByID(ctx, userID)
@@ -447,7 +447,7 @@ type UpdateUserResult struct {
 	TempPassword *string
 }
 
-// UpdateUser implements MVP-001.5.
+// UpdateUser implements.
 func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID int64, in domain.UpdateUserInput, ip *string) (*UpdateUserResult, error) {
 	if actor == nil {
 		return nil, domain.ErrUnauthorized
@@ -488,7 +488,7 @@ func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID
 	oldPeran, oldSPPG, oldSekolah, oldAktif := target.Peran, target.SPPGID, target.SekolahID, target.Aktif
 	oldNama, oldNoHP := target.Nama, target.NoHP
 
-	// A user cannot deactivate or demote itself (MVP-001.5).
+	// A user cannot deactivate or demote itself.
 	if actor.UserID == target.ID {
 		if in.Aktif != nil && !*in.Aktif {
 			s.deny(ctx, &actor.UserID, "users: self deactivation forbidden", ip)
@@ -566,7 +566,7 @@ func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID
 	if err := s.checkScopeRefs(ctx, target.SPPGID, target.SekolahID, target.Peran); err != nil {
 		return nil, err
 	}
-	// Every SPPG keeps at least one active kepala_sppg (MVP-001.5).
+	// Every SPPG keeps at least one active kepala_sppg.
 	if oldPeran == domain.RoleKepalaSPPG && oldAktif && oldSPPG != nil {
 		leaving := !target.Aktif || target.Peran != domain.RoleKepalaSPPG || !equalInt64Ptr(target.SPPGID, oldSPPG)
 		if leaving {
@@ -621,7 +621,7 @@ func (s *Service) UpdateUser(ctx context.Context, actor *domain.Claims, targetID
 	return &UpdateUserResult{User: updated, TempPassword: tempPassword}, nil
 }
 
-// ChangePassword implements MVP-001.6.
+// ChangePassword implements.
 // Other sessions are revoked; the newest (current) session is kept.
 func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPassword, newPassword string, ip *string) error {
 	if !domain.ValidatePasswordPolicy(newPassword) {
@@ -674,7 +674,7 @@ func (s *Service) ChangePassword(ctx context.Context, userID int64, oldPassword,
 	return nil
 }
 
-// AuditActor is the nested user reference in audit responses (MVP-001.7).
+// AuditActor is the nested user reference in audit responses.
 type AuditActor struct {
 	ID    int64
 	Nama  string
@@ -687,7 +687,7 @@ type AuditLogView struct {
 	Actor *AuditActor
 }
 
-// ListAuditLogs implements MVP-001.7 with role scoping.
+// ListAuditLogs implements with role scoping.
 func (s *Service) ListAuditLogs(ctx context.Context, actor *domain.Claims, filter domain.AuditFilter) ([]AuditLogView, int, error) {
 	if actor == nil {
 		return nil, 0, domain.ErrUnauthorized
@@ -737,12 +737,10 @@ func (s *Service) ListAuditLogs(ctx context.Context, actor *domain.Claims, filte
 	return views, total, nil
 }
 
-// LogDenial records a 403 denial (MVP-001.8, aksi DENY). Best-effort.
+// LogDenial records a 403 denial (aksi DENY). Best-effort.
 func (s *Service) LogDenial(ctx context.Context, userID *int64, reason string, ip *string) {
 	s.deny(ctx, userID, reason, ip)
 }
-
-// --- MVP-002.8 ---
 
 // UserListView pairs a user with resolved names and derived lock status.
 // Password hashes, tokens, and failure counters are never exposed.
@@ -759,9 +757,9 @@ type UserDetailView struct {
 	JumlahSesiAktif int
 }
 
-// ListUsers implements GET /users (MVP-002.8). Only admin and kepala_sppg;
+// ListUsers implements GET /users. Only admin and kepala_sppg;
 // kepala_sppg sees its own SPPG without admin/pengawas accounts.
-// Reads are not audited; denials go through deny (MVP-001.8).
+// Reads are not audited; denials go through deny.
 func (s *Service) ListUsers(ctx context.Context, actor *domain.Claims, filter domain.UserFilter) ([]UserListView, int, error) {
 	if actor == nil {
 		return nil, 0, domain.ErrUnauthorized
@@ -842,8 +840,8 @@ func (s *Service) ListUsers(ctx context.Context, actor *domain.Claims, filter do
 	return views, total, nil
 }
 
-// GetUser implements GET /users/{id} (MVP-002.8). Cross-SPPG targets answer
-// 404 (MVP-001.8); admin/pengawas accounts never resolve for kepala_sppg.
+// GetUser implements GET /users/{id}. Cross-SPPG targets answer
+// 404; admin/pengawas accounts never resolve for kepala_sppg.
 func (s *Service) GetUser(ctx context.Context, actor *domain.Claims, id int64) (*UserDetailView, error) {
 	if actor == nil {
 		return nil, domain.ErrUnauthorized
